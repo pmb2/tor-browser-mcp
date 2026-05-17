@@ -3,21 +3,22 @@
 from __future__ import annotations
 
 import logging
-import re
 import shutil
 import tempfile
-import time
 from contextlib import suppress
 from pathlib import Path
 from subprocess import Popen
 from types import TracebackType
-from typing import Any
 
 from selenium import webdriver
-from selenium.webdriver.common.by import By
 from stem.control import Controller
 
 from ._core_primitives import _CoreCapabilityMixin
+from ._diagnostics_primitives import _DiagnosticsCapabilityMixin
+from ._extract_primitives import _ExtractCapabilityMixin
+from ._network_observe_primitives import _NetworkObserveCapabilityMixin
+from ._state_primitives import _StateCapabilityMixin
+from ._tor_primitives import _TorCapabilityMixin
 from .browser_process import launch_browser
 from .config import DriverConfig
 from .tor_process import launch_tor, shutdown_tor
@@ -25,13 +26,14 @@ from .tor_process import launch_tor, shutdown_tor
 log = logging.getLogger(__name__)
 
 
-_IP_RE = re.compile(
-    r"(?:Your IP address appears to be|Your IP address is)[:\s]+([0-9a-fA-F:.]+)"
-)
-_ANY_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-
-
-class TorBrowserDriver(_CoreCapabilityMixin):
+class TorBrowserDriver(
+    _CoreCapabilityMixin,
+    _StateCapabilityMixin,
+    _ExtractCapabilityMixin,
+    _DiagnosticsCapabilityMixin,
+    _TorCapabilityMixin,
+    _NetworkObserveCapabilityMixin,
+):
     """Boot tor + Tor Browser, expose the underlying selenium/stem handles.
 
     Used as a context manager. On enter, the driver:
@@ -118,53 +120,3 @@ class TorBrowserDriver(_CoreCapabilityMixin):
         if self._owns_session_dir and self._session_dir is not None:
             with suppress(Exception):
                 shutil.rmtree(self._session_dir, ignore_errors=True)
-
-    def check_tor_via_browser(
-        self,
-        *,
-        timeout: float = 90.0,
-        cache_buster: bool = True,
-    ) -> dict[str, Any]:
-        """Navigate to ``check.torproject.org`` and report routing status.
-
-        Returns a dict with keys ``is_tor`` (bool, ``True`` when the page
-        reports the connection as Tor), ``exit_ip`` (string IP parsed from
-        the page, or ``None``), and ``body_excerpt`` (first ~500 characters
-        of the page text, useful for debugging).
-        """
-
-        if self.webdriver is None:
-            raise RuntimeError(
-                "TorBrowserDriver.check_tor_via_browser called before __enter__"
-            )
-
-        url = "https://check.torproject.org/"
-        if cache_buster:
-            url = f"{url}?_={int(time.time() * 1000)}"
-
-        self.webdriver.get(url)
-        deadline = time.monotonic() + timeout
-        body_text = ""
-        while time.monotonic() < deadline:
-            elements = self.webdriver.find_elements(By.TAG_NAME, "body")
-            if elements:
-                body_text = elements[0].text or ""
-                if "Congratulations" in body_text or "Sorry" in body_text:
-                    break
-            time.sleep(1.0)
-
-        is_tor = "Congratulations" in body_text
-        exit_ip: str | None = None
-        match = _IP_RE.search(body_text)
-        if match:
-            exit_ip = match.group(1)
-        else:
-            any_match = _ANY_IPV4_RE.search(body_text)
-            if any_match:
-                exit_ip = any_match.group(0)
-
-        return {
-            "is_tor": is_tor,
-            "exit_ip": exit_ip,
-            "body_excerpt": body_text[:500],
-        }

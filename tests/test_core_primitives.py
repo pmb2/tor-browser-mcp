@@ -316,3 +316,34 @@ def test_browser_handle_dialog_without_alert_raises(drv: TorBrowserDriver) -> No
     )
     with pytest.raises(TorBrowserDriverError):
         drv.browser_handle_dialog(accept=True)
+
+
+def test_browser_dump_page_writes_all_artifacts(
+    drv: TorBrowserDriver, policy: PathPolicy
+) -> None:
+    drv.webdriver.page_source = "<html><body>hi</body></html>"
+    drv.webdriver.current_url = "https://x.test/"
+    drv.webdriver.title = "X"
+    drv.webdriver.get_cookies.return_value = [{"name": "c", "value": "v"}]
+    drv.webdriver.get_screenshot_as_png.return_value = b"\x89PNG\r\n\x1a\n"
+    if hasattr(drv.webdriver, "get_full_page_screenshot_as_png"):
+        del drv.webdriver.get_full_page_screenshot_as_png
+    drv.webdriver.get_log.side_effect = RuntimeError("not supported")
+    drv.webdriver.execute_script.side_effect = [
+        "body text",                                     # innerText for dump
+        {"tag": "html", "role": None, "name": None, "text": None, "children": [], "bounds": None},  # snapshot
+        ["local-a"],                                     # localStorage keys
+        [],                                              # sessionStorage keys
+        [{"url": "https://x.test/", "initiator_type": "navigation"}],  # network entries
+    ]
+
+    result = drv.browser_dump_page(prefix="dump-test")
+    artifacts = result["artifacts"]
+    for path in artifacts.values():
+        assert Path(path).is_file()
+    assert result["url"] == "https://x.test/"
+    assert result["title"] == "X"
+    assert Path(artifacts["source"]).read_text(encoding="utf-8") == "<html><body>hi</body></html>"
+    assert Path(artifacts["text"]).read_text(encoding="utf-8") == "body text"
+    console_payload = json.loads(Path(artifacts["console"]).read_text(encoding="utf-8"))
+    assert console_payload["supported"] is False

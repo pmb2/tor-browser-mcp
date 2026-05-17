@@ -50,6 +50,75 @@ EXPECTED_CORE_METHODS: frozenset[str] = frozenset(
         "browser_output_read",
         "browser_output_list",
         "browser_output_delete",
+        "browser_dump_page",
+    }
+)
+
+
+EXPECTED_STATE_METHODS: frozenset[str] = frozenset(
+    {
+        "browser_cookie_list",
+        "browser_cookie_get",
+        "browser_cookie_set",
+        "browser_cookie_delete",
+        "browser_cookie_clear",
+        "browser_localstorage_list",
+        "browser_localstorage_get",
+        "browser_localstorage_set",
+        "browser_localstorage_delete",
+        "browser_localstorage_clear",
+        "browser_sessionstorage_list",
+        "browser_sessionstorage_get",
+        "browser_sessionstorage_set",
+        "browser_sessionstorage_delete",
+        "browser_sessionstorage_clear",
+        "browser_storage_state",
+        "browser_set_storage_state",
+    }
+)
+
+
+EXPECTED_EXTRACT_METHODS: frozenset[str] = frozenset(
+    {
+        "browser_extract_links",
+        "browser_extract_forms",
+        "browser_extract_inputs",
+        "browser_extract_scripts",
+        "browser_extract_metadata",
+        "browser_extract_tables",
+        "browser_find_text",
+        "browser_find_selector",
+    }
+)
+
+
+EXPECTED_DIAGNOSTICS_METHODS: frozenset[str] = frozenset(
+    {
+        "browser_console_messages",
+        "browser_get_config",
+        "browser_fingerprint_probe",
+    }
+)
+
+
+EXPECTED_TOR_METHODS: frozenset[str] = frozenset(
+    {
+        "tor_status",
+        "tor_check_identity",
+        "tor_new_identity",
+        "tor_circuit_status",
+        "tor_stream_status",
+        "tor_entry_guards",
+        "tor_get_info",
+        "tor_resolve",
+    }
+)
+
+
+EXPECTED_NETWORK_OBSERVE_METHODS: frozenset[str] = frozenset(
+    {
+        "browser_network_requests",
+        "browser_network_request",
     }
 )
 
@@ -88,6 +157,31 @@ def test_unknown_capability_raises() -> None:
 def test_registered_methods_core_matches_expected_set() -> None:
     methods = registered_methods(TorBrowserDriver, {"core"})
     assert set(methods.keys()) == EXPECTED_CORE_METHODS
+
+
+def test_registered_methods_state_matches_expected_set() -> None:
+    methods = registered_methods(TorBrowserDriver, {"state"})
+    assert set(methods.keys()) == EXPECTED_STATE_METHODS
+
+
+def test_registered_methods_extract_matches_expected_set() -> None:
+    methods = registered_methods(TorBrowserDriver, {"extract"})
+    assert set(methods.keys()) == EXPECTED_EXTRACT_METHODS
+
+
+def test_registered_methods_diagnostics_matches_expected_set() -> None:
+    methods = registered_methods(TorBrowserDriver, {"diagnostics"})
+    assert set(methods.keys()) == EXPECTED_DIAGNOSTICS_METHODS
+
+
+def test_registered_methods_tor_matches_expected_set() -> None:
+    methods = registered_methods(TorBrowserDriver, {"tor"})
+    assert set(methods.keys()) == EXPECTED_TOR_METHODS
+
+
+def test_registered_methods_network_observe_matches_expected_set() -> None:
+    methods = registered_methods(TorBrowserDriver, {"network-observe"})
+    assert set(methods.keys()) == EXPECTED_NETWORK_OBSERVE_METHODS
 
 
 def test_registered_methods_empty_caps_returns_empty() -> None:

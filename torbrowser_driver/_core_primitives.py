@@ -947,3 +947,114 @@ class _CoreCapabilityMixin:
         if path.exists():
             path.unlink()
         return {"deleted": str(path)}
+
+    @capability("core")
+    def browser_dump_page(self, prefix: str | None = None) -> dict[str, Any]:
+        """Write a fixed set of debug artifacts for the current page.
+
+        Always produces the same nine files under :attr:`PathPolicy.output_dir`:
+        ``<prefix>-source.html``, ``<prefix>-text.txt``,
+        ``<prefix>-snapshot.json``, ``<prefix>-screenshot.png``,
+        ``<prefix>-cookies.json``, ``<prefix>-localstorage.json``,
+        ``<prefix>-sessionstorage.json``, ``<prefix>-console.json``, and
+        ``<prefix>-network.json``. Artifacts that cannot be captured (the
+        most common case being the console log on Firefox/geckodriver)
+        still get a file containing the underlying helper's fallback
+        payload, so the artifact set is invariant. ``prefix`` defaults to
+        ``dump-<ms-timestamp>`` when ``None``.
+        """
+
+        drv = self._require_driver()
+        if prefix is None:
+            prefix = f"dump-{int(time.time() * 1000)}"
+
+        policy = self.config.path_policy
+
+        source_path = policy.resolve_output(f"{prefix}-source.html")
+        source_path.write_bytes((drv.page_source or "").encode("utf-8"))
+
+        text_path = policy.resolve_output(f"{prefix}-text.txt")
+        body_text = drv.execute_script(
+            "return document.body ? document.body.innerText : '';"
+        ) or ""
+        text_path.write_bytes(str(body_text).encode("utf-8"))
+
+        snapshot_tree = drv.execute_script(
+            _SNAPSHOT_JS, None, 12, False
+        )
+        snapshot_path = policy.resolve_output(f"{prefix}-snapshot.json")
+        snapshot_path.write_bytes(
+            json.dumps(snapshot_tree, ensure_ascii=False).encode("utf-8")
+        )
+
+        screenshot_name = f"{prefix}-screenshot.png"
+        self.browser_take_screenshot(full_page=True, filename=screenshot_name)
+        screenshot_path = policy.resolve_output(screenshot_name)
+
+        cookies_payload = {"cookies": list(drv.get_cookies() or [])}
+        cookies_path = policy.resolve_output(f"{prefix}-cookies.json")
+        cookies_path.write_bytes(
+            json.dumps(cookies_payload, ensure_ascii=False).encode("utf-8")
+        )
+
+        local_keys = drv.execute_script(
+            "return Object.keys(window.localStorage);"
+        ) or []
+        local_payload = {"keys": list(local_keys), "size": len(local_keys)}
+        local_path = policy.resolve_output(f"{prefix}-localstorage.json")
+        local_path.write_bytes(
+            json.dumps(local_payload, ensure_ascii=False).encode("utf-8")
+        )
+
+        session_keys = drv.execute_script(
+            "return Object.keys(window.sessionStorage);"
+        ) or []
+        session_payload = {
+            "keys": list(session_keys),
+            "size": len(session_keys),
+        }
+        session_path = policy.resolve_output(f"{prefix}-sessionstorage.json")
+        session_path.write_bytes(
+            json.dumps(session_payload, ensure_ascii=False).encode("utf-8")
+        )
+
+        console = self.browser_console_messages(all=True)  # type: ignore[attr-defined]
+        console_path = policy.resolve_output(f"{prefix}-console.json")
+        if "path" in console:
+            console_for_file = {
+                k: v for k, v in console.items() if k not in ("path", "bytes")
+            }
+        else:
+            console_for_file = console
+        console_path.write_bytes(
+            json.dumps(console_for_file, ensure_ascii=False).encode("utf-8")
+        )
+
+        network = self.browser_network_requests()  # type: ignore[attr-defined]
+        network_path = policy.resolve_output(f"{prefix}-network.json")
+        if "path" in network:
+            network_for_file = {
+                k: v for k, v in network.items() if k not in ("path", "bytes")
+            }
+        else:
+            network_for_file = network
+        network_path.write_bytes(
+            json.dumps(network_for_file, ensure_ascii=False).encode("utf-8")
+        )
+
+        return {
+            "prefix": prefix,
+            "artifacts": {
+                "source": str(source_path),
+                "text": str(text_path),
+                "snapshot": str(snapshot_path),
+                "screenshot": str(screenshot_path),
+                "cookies": str(cookies_path),
+                "localstorage": str(local_path),
+                "sessionstorage": str(session_path),
+                "console": str(console_path),
+                "network": str(network_path),
+            },
+            "url": drv.current_url,
+            "title": drv.title,
+        }
