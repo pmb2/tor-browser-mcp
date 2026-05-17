@@ -54,6 +54,16 @@ def test_boot_check_newnym_teardown(
     )
 
     with TorBrowserDriver(config) as drv:
+        navigated = drv.browser_navigate("about:blank")
+        assert navigated["url"].startswith("about:")
+        assert drv.browser_title()["title"] == navigated["title"]
+
+        shot = drv.browser_take_screenshot()
+        shot_path = Path(shot["path"])
+        assert shot_path.is_file()
+        assert shot_path.parent == policy.output_dir
+        assert shot["bytes"] > 0
+
         first = drv.check_tor_via_browser(timeout=120.0)
         assert first["is_tor"], f"Tor check did not pass: {first['body_excerpt']!r}"
         assert first["exit_ip"], "no exit IP parsed from check page"

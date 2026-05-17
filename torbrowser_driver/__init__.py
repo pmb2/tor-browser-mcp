@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from .capabilities import (
+    DEFAULT_CAPABILITIES,
+    KNOWN_CAPABILITIES,
+    OPTIONAL_CAPABILITIES,
+    capability,
+    registered_methods,
+)
 from .config import DriverConfig
 from .driver import TorBrowserDriver
 from .exceptions import (
@@ -17,12 +24,17 @@ __version__ = "0.0.0"
 
 __all__ = [
     "BrowserLaunchError",
+    "DEFAULT_CAPABILITIES",
     "DriverConfig",
     "DriverConfigError",
+    "KNOWN_CAPABILITIES",
+    "OPTIONAL_CAPABILITIES",
     "PathNotAllowed",
     "PathPolicy",
     "TorBootstrapTimeout",
     "TorBrowserDriver",
     "TorBrowserDriverError",
     "__version__",
+    "capability",
+    "registered_methods",
 ]

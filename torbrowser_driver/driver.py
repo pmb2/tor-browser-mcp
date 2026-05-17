@@ -17,6 +17,7 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from stem.control import Controller
 
+from ._core_primitives import _CoreCapabilityMixin
 from .browser_process import launch_browser
 from .config import DriverConfig
 from .tor_process import launch_tor, shutdown_tor
@@ -30,7 +31,7 @@ _IP_RE = re.compile(
 _ANY_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
 
-class TorBrowserDriver:
+class TorBrowserDriver(_CoreCapabilityMixin):
     """Boot tor + Tor Browser, expose the underlying selenium/stem handles.
 
     Used as a context manager. On enter, the driver:

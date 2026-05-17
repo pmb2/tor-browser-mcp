@@ -56,6 +56,22 @@ def _load_bearing_prefs(config: DriverConfig) -> dict[str, Any]:
     suppressors.
     """
 
+    download_dir = str(config.path_policy.output_dir)
+    never_ask_mime = ",".join(
+        (
+            "application/pdf",
+            "application/octet-stream",
+            "application/zip",
+            "application/x-tar",
+            "application/gzip",
+            "application/json",
+            "text/csv",
+            "text/plain",
+            "application/xml",
+            "image/png",
+            "image/jpeg",
+        )
+    )
     prefs: dict[str, Any] = {
         "network.proxy.type": 1,
         "network.proxy.socks": "127.0.0.1",
@@ -72,6 +88,12 @@ def _load_bearing_prefs(config: DriverConfig) -> dict[str, Any]:
         "webdriver.load.strategy": "normal",
         "torbrowser.settings.quickstart.enabled": True,
         "intl.language_notification.shown": True,
+        "browser.download.folderList": 2,
+        "browser.download.dir": download_dir,
+        "browser.download.useDownloadDir": True,
+        "browser.download.manager.showWhenStarting": False,
+        "browser.helperApps.neverAsk.saveToDisk": never_ask_mime,
+        "pdfjs.disabled": True,
     }
     if config.include_legacy_tor_prefs:
         prefs.update(
