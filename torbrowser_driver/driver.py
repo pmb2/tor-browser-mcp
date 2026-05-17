@@ -16,9 +16,13 @@ from stem.control import Controller
 from ._core_primitives import _CoreCapabilityMixin
 from ._diagnostics_primitives import _DiagnosticsCapabilityMixin
 from ._extract_primitives import _ExtractCapabilityMixin
+from ._highlight_primitives import _HighlightCapabilityMixin
 from ._network_observe_primitives import _NetworkObserveCapabilityMixin
 from ._state_primitives import _StateCapabilityMixin
 from ._tor_primitives import _TorCapabilityMixin
+from ._tor_routing_primitives import _TorRoutingCapabilityMixin
+from ._unsafe_primitives import _UnsafeCapabilityMixin
+from ._vision_primitives import _VisionCapabilityMixin
 from .browser_process import launch_browser
 from .config import DriverConfig
 from .tor_process import launch_tor, shutdown_tor
@@ -33,6 +37,10 @@ class TorBrowserDriver(
     _DiagnosticsCapabilityMixin,
     _TorCapabilityMixin,
     _NetworkObserveCapabilityMixin,
+    _VisionCapabilityMixin,
+    _HighlightCapabilityMixin,
+    _TorRoutingCapabilityMixin,
+    _UnsafeCapabilityMixin,
 ):
     """Boot tor + Tor Browser, expose the underlying selenium/stem handles.
 

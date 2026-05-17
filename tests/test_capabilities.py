@@ -123,6 +123,45 @@ EXPECTED_NETWORK_OBSERVE_METHODS: frozenset[str] = frozenset(
 )
 
 
+EXPECTED_VISION_METHODS: frozenset[str] = frozenset(
+    {
+        "browser_mouse_move_xy",
+        "browser_mouse_click_xy",
+        "browser_mouse_down",
+        "browser_mouse_up",
+        "browser_mouse_drag_xy",
+        "browser_mouse_wheel",
+        "browser_resize",
+    }
+)
+
+
+EXPECTED_HIGHLIGHT_METHODS: frozenset[str] = frozenset(
+    {
+        "browser_highlight",
+        "browser_hide_highlight",
+    }
+)
+
+
+EXPECTED_TOR_ROUTING_METHODS: frozenset[str] = frozenset(
+    {
+        "tor_set_exit_country",
+        "tor_set_exit_nodes",
+        "tor_clear_exit_policy",
+    }
+)
+
+
+EXPECTED_UNSAFE_METHODS: frozenset[str] = frozenset(
+    {
+        "browser_chrome_evaluate_unsafe",
+        "browser_run_python_unsafe",
+        "tor_control_command_unsafe",
+    }
+)
+
+
 def test_known_is_union_of_default_and_optional() -> None:
     assert KNOWN_CAPABILITIES == DEFAULT_CAPABILITIES | OPTIONAL_CAPABILITIES
     assert DEFAULT_CAPABILITIES.isdisjoint(OPTIONAL_CAPABILITIES)
@@ -182,6 +221,26 @@ def test_registered_methods_tor_matches_expected_set() -> None:
 def test_registered_methods_network_observe_matches_expected_set() -> None:
     methods = registered_methods(TorBrowserDriver, {"network-observe"})
     assert set(methods.keys()) == EXPECTED_NETWORK_OBSERVE_METHODS
+
+
+def test_registered_methods_vision_matches_expected_set() -> None:
+    methods = registered_methods(TorBrowserDriver, {"vision"})
+    assert set(methods.keys()) == EXPECTED_VISION_METHODS
+
+
+def test_registered_methods_highlight_matches_expected_set() -> None:
+    methods = registered_methods(TorBrowserDriver, {"highlight"})
+    assert set(methods.keys()) == EXPECTED_HIGHLIGHT_METHODS
+
+
+def test_registered_methods_tor_routing_matches_expected_set() -> None:
+    methods = registered_methods(TorBrowserDriver, {"tor-routing"})
+    assert set(methods.keys()) == EXPECTED_TOR_ROUTING_METHODS
+
+
+def test_registered_methods_unsafe_matches_expected_set() -> None:
+    methods = registered_methods(TorBrowserDriver, {"unsafe"})
+    assert set(methods.keys()) == EXPECTED_UNSAFE_METHODS
 
 
 def test_registered_methods_empty_caps_returns_empty() -> None:
