@@ -11,7 +11,11 @@ requires-python = ">=3.10"
 dependencies = [
     "selenium>=4.15",
     "stem>=1.8",
+    "mcp>=1.0",
 ]
+
+[project.scripts]
+torbrowser-mcp = "torbrowser_mcp.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -19,7 +23,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["torbrowser_driver*"]
+include = ["torbrowser_driver*", "torbrowser_mcp*"]
 exclude = ["tests*", "references*"]
 
 [tool.pytest.ini_options]
