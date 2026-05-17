@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "torbrowser-mcp"
+version = "0.0.0"
+description = "MCP server for stock Tor Browser automation via geckodriver and Marionette"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "selenium>=4.15",
+    "stem>=1.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+]
+
+[tool.setuptools.packages.find]
+include = ["torbrowser_driver*"]
+exclude = ["tests*", "references*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: requires a real Tor Browser binary; opt-in",
+]

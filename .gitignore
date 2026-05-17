@@ -1,0 +1,19 @@
+# Private workspace — agent rules, plans, internal notes
+.claude/
+
+# Third-party recon material pulled in for reference; not ours to redistribute
+references/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
