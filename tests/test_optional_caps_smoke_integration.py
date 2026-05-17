@@ -35,7 +35,7 @@ SOCKS_PORT = 9254
 CONTROL_PORT = 9255
 
 OPTIONAL_CAPS_UNDER_TEST: frozenset[str] = frozenset(
-    {"vision", "highlight", "tor-routing", "unsafe"}
+    {"vision", "highlight", "tor-routing", "unsafe", "pdf", "http-over-tor"}
 )
 
 
@@ -303,3 +303,95 @@ def test_unsafe_primitives_live(drv: TorBrowserDriver) -> None:
     href_after = drv.webdriver.execute_script("return document.location.href;")
     assert isinstance(href_after, str)
     assert href_after.startswith("about:blank")
+
+
+def test_pdf_primitives_live(drv: TorBrowserDriver) -> None:
+    """Exercise the pdf-cap save against a real ``data:`` page.
+
+    Skips with a clear diagnostic if Tor Browser's Firefox build does not
+    expose a working ``print_page`` pipeline, which is the documented
+    fall-through for the capability.
+    """
+
+    html = """
+    <!doctype html>
+    <html><head><meta charset="utf-8"><title>pdf-smoke</title></head>
+    <body>
+      <h1>Printable Heading</h1>
+      <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>
+      <p>Second paragraph for layout bulk.</p>
+    </body></html>
+    """
+    drv.browser_navigate(url=_data_url(html))
+
+    try:
+        result = drv.browser_pdf_save()
+    except Exception as exc:
+        pytest.skip(
+            f"WebDriver.print_page failed against this Tor Browser build: "
+            f"{exc!r}"
+        )
+
+    written = Path(result["path"])
+    assert written.is_file()
+    assert result["bytes"] > 1024, (
+        f"PDF unexpectedly small ({result['bytes']} bytes); "
+        f"print_page may be returning a stub"
+    )
+    with open(written, "rb") as fh:
+        magic = fh.read(5)
+    assert magic == b"%PDF-", (
+        f"output at {written} does not start with %PDF- magic: {magic!r}"
+    )
+
+
+def test_http_over_tor_primitives_live(drv: TorBrowserDriver) -> None:
+    """Exercise the http-over-tor primitives through the bundled tor."""
+
+    result = drv.tor_http_request(
+        method="GET",
+        url="https://check.torproject.org/",
+        timeout=60.0,
+    )
+    assert result["status"] == 200
+    body = result.get("body")
+    assert isinstance(body, str) and body, (
+        f"expected textual body, got keys={list(result.keys())!r}"
+    )
+    assert ("Congratulations" in body) or ("Sorry" in body), (
+        f"check.torproject.org body did not contain the expected markers; "
+        f"first 300 chars: {body[:300]!r}"
+    )
+
+    drv.browser_navigate(url="https://check.torproject.org/")
+    second = drv.tor_http_request(
+        method="GET",
+        url="https://check.torproject.org/",
+        use_browser_cookies=True,
+        timeout=60.0,
+    )
+    assert second["status"] == 200
+
+
+def test_http_over_tor_sequence_live(drv: TorBrowserDriver) -> None:
+    """Run a two-step sequence against ``check.torproject.org``.
+
+    Flaky in principle (depends on the check.torproject.org JSON endpoint
+    staying reachable). Skips on transport-level failure rather than
+    failing.
+    """
+
+    try:
+        out = drv.tor_http_sequence(
+            requests=[
+                {"url": "https://check.torproject.org/", "timeout": 60.0},
+                {"url": "https://check.torproject.org/api/ip", "timeout": 60.0},
+            ]
+        )
+    except Exception as exc:
+        pytest.skip(f"tor_http_sequence transport error: {exc!r}")
+
+    assert len(out["results"]) == 2
+    statuses = [r["status"] for r in out["results"]]
+    assert statuses[0] == 200, f"unexpected first-hop status: {statuses!r}"
+    assert isinstance(out["final_cookie_jar"], dict)

@@ -12,6 +12,7 @@ dependencies = [
     "selenium>=4.15",
     "stem>=1.8",
     "mcp>=1.0",
+    "urllib3[socks]>=2",
 ]
 
 [project.scripts]

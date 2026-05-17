@@ -162,6 +162,21 @@ EXPECTED_UNSAFE_METHODS: frozenset[str] = frozenset(
 )
 
 
+EXPECTED_PDF_METHODS: frozenset[str] = frozenset(
+    {
+        "browser_pdf_save",
+    }
+)
+
+
+EXPECTED_HTTP_OVER_TOR_METHODS: frozenset[str] = frozenset(
+    {
+        "tor_http_request",
+        "tor_http_sequence",
+    }
+)
+
+
 def test_known_is_union_of_default_and_optional() -> None:
     assert KNOWN_CAPABILITIES == DEFAULT_CAPABILITIES | OPTIONAL_CAPABILITIES
     assert DEFAULT_CAPABILITIES.isdisjoint(OPTIONAL_CAPABILITIES)
@@ -241,6 +256,16 @@ def test_registered_methods_tor_routing_matches_expected_set() -> None:
 def test_registered_methods_unsafe_matches_expected_set() -> None:
     methods = registered_methods(TorBrowserDriver, {"unsafe"})
     assert set(methods.keys()) == EXPECTED_UNSAFE_METHODS
+
+
+def test_registered_methods_pdf_matches_expected_set() -> None:
+    methods = registered_methods(TorBrowserDriver, {"pdf"})
+    assert set(methods.keys()) == EXPECTED_PDF_METHODS
+
+
+def test_registered_methods_http_over_tor_matches_expected_set() -> None:
+    methods = registered_methods(TorBrowserDriver, {"http-over-tor"})
+    assert set(methods.keys()) == EXPECTED_HTTP_OVER_TOR_METHODS
 
 
 def test_registered_methods_empty_caps_returns_empty() -> None:
