@@ -274,8 +274,18 @@ def test_helper_extension_is_known_optional_capability() -> None:
     assert "helper-extension" not in DEFAULT_CAPABILITIES
 
 
-def test_registered_methods_helper_extension_currently_empty() -> None:
-    assert registered_methods(TorBrowserDriver, {"helper-extension"}) == {}
+EXPECTED_HELPER_EXTENSION_METHODS = {
+    "browser_extension_status",
+    "browser_network_capture_start",
+    "browser_network_capture_stop",
+    "browser_add_init_script",
+    "browser_remove_init_script",
+}
+
+
+def test_registered_methods_helper_extension_matches_expected_set() -> None:
+    methods = registered_methods(TorBrowserDriver, {"helper-extension"})
+    assert set(methods.keys()) == EXPECTED_HELPER_EXTENSION_METHODS
 
 
 def test_registered_methods_empty_caps_returns_empty() -> None:

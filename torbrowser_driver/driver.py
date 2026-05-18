@@ -25,6 +25,7 @@ from ._helper_extension_install import (
     prepare_helper_install,
     uninstall_helper,
 )
+from ._helper_extension_primitives import _HelperExtensionCapabilityMixin
 from ._highlight_primitives import _HighlightCapabilityMixin
 from ._http_over_tor_primitives import _HttpOverTorCapabilityMixin
 from ._network_observe_primitives import _NetworkObserveCapabilityMixin
@@ -55,6 +56,7 @@ class TorBrowserDriver(
     _UnsafeCapabilityMixin,
     _PdfCapabilityMixin,
     _HttpOverTorCapabilityMixin,
+    _HelperExtensionCapabilityMixin,
 ):
     """Boot tor + Tor Browser, expose the underlying selenium/stem handles.
 

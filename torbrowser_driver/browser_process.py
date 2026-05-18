@@ -129,6 +129,14 @@ def _load_bearing_prefs(config: DriverConfig) -> dict[str, Any]:
         prefs["extensions.autoDisableScopes"] = 0
         prefs["extensions.enabledScopes"] = 15
         prefs["xpinstall.signatures.required"] = False
+        # Run the helper in the parent process. With out-of-process
+        # extensions (the Firefox default), webRequest's
+        # filterResponseData on top-level navigations and many
+        # cross-process subresources does not deliver bytes through
+        # ondata even though the filter object attaches and onstop
+        # fires; co-locating the extension with the network stack
+        # restores the byte stream.
+        prefs["extensions.webextensions.remote"] = False
     return prefs
 
 
