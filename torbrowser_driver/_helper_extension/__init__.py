@@ -12,10 +12,10 @@ from pathlib import Path
 
 HELPER_EXTENSION_DIR: Path = Path(__file__).parent
 
-# The gecko id pinned in ``manifest.json``. Profile-scope sideload places the
-# packed XPI at ``<profile>/extensions/<HELPER_EXTENSION_ID>.xpi``; Firefox
-# discovers the addon by matching the filename stem against this id at
-# profile-startup time.
+# The gecko id pinned in ``manifest.json``. The driver grants
+# ``internal:privateBrowsingAllowed`` against this id before calling
+# ``AddonManager.installTemporaryAddon`` so the background page is
+# instantiated under permanent private browsing.
 HELPER_EXTENSION_ID: str = "helper@tor-browser-mcp.local"
 
 __all__ = ["HELPER_EXTENSION_DIR", "HELPER_EXTENSION_ID"]

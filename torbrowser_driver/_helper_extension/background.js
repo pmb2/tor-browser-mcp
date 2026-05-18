@@ -1,17 +1,12 @@
 "use strict";
 
-// Firefox 140 ESR (TB 15.x) silently treats MV2 backgrounds with
-// "persistent": true as event pages. The page is only loaded when an
-// event listener fires, and unloads after ~30 s of inactivity. We
-// keep the page alive by:
-//   1. Registering listeners synchronously at module load (forces
-//      Firefox to parse the script when an event needs to be
-//      dispatched).
-//   2. Triggering startup from runtime.onStartup / runtime.onInstalled,
-//      both of which fire reliably for a freshly-installed extension.
-//   3. Holding the page alive with a recurring browser.alarms tick;
-//      alarms reset the event-page inactivity timer the same way any
-//      extension API event does.
+// The driver installs this extension into a permanent-private-browsing
+// profile after granting internal:privateBrowsingAllowed on the gecko
+// id, so Firefox's ext-backgroundPage onManifestEntry hook actually
+// instantiates the background page. With that grant in place
+// "persistent": true gives a real persistent page; the synchronous
+// listener registrations below and the alarms keepalive are defensive
+// in case a future Firefox build tightens event-page suspension.
 
 const POLL_BACKOFF_MS = 1000;
 const EXTENSION_VERSION = "0.1.0";
@@ -283,9 +278,8 @@ function setNetworkState(params) {
   return { state: state };
 }
 
-// Register the routing listeners once at module-parse time. They
-// are no-ops when the route table is empty; their presence keeps the
-// background page alive on event-page builds and avoids the
+// Register the routing listeners once at module-parse time. They are
+// no-ops when the route table is empty; registering once avoids the
 // add/remove churn that would otherwise tear down the listener every
 // time the route table empties.
 browser.webRequest.onBeforeRequest.addListener(
@@ -588,8 +582,10 @@ async function startup() {
   if (started) return;
   started = true;
 
-  // Ensure the keepalive alarm is armed before we enter the long-poll
-  // loop. Event-page suspension is reset by alarm fires.
+  // Keepalive alarm. Defensive: with internal:privateBrowsingAllowed
+  // granted on the current build the background page is persistent,
+  // but a periodic alarm tick would also reset event-page suspension
+  // if a future Firefox build re-enables it.
   try {
     await browser.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.25 });
   } catch (e) {
@@ -674,9 +670,10 @@ async function startup() {
   }
 }
 
-// Synchronous listener registrations. Their presence at module-parse
-// time is what makes Firefox treat this as a real background page
-// rather than a fully-dormant event page.
+// Synchronous listener registrations. Defensive in case a future
+// Firefox build downgrades persistent MV2 backgrounds to event pages;
+// listeners registered at module-parse time are what such builds use
+// to decide when to revive a suspended page.
 browser.runtime.onStartup.addListener(function () {
   startup().catch(logError);
 });
@@ -689,8 +686,7 @@ browser.alarms.onAlarm.addListener(function (alarm) {
   }
 });
 
-// Belt-and-braces: also kick startup at module-load. If Firefox does
-// honour persistent: true on the current build, the script runs at
-// install time and this path wins. If not, the listeners above pick up
-// the slack.
+// On the current build persistent: true means the script runs at
+// install time and this path wins; the runtime.onStartup /
+// runtime.onInstalled / alarms paths above remain as fallbacks.
 startup().catch(logError);

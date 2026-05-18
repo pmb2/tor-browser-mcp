@@ -549,9 +549,22 @@ class _HelperExtensionCapabilityMixin:
 
         Each pattern follows Firefox match-pattern syntax (see
         :func:`validate_match_pattern`). ``None`` is equivalent to
-        ``["<all_urls>"]``. Per-response bodies are streamed via
-        ``filterResponseData`` when ``capture_response_body`` is true and
-        truncated at ``max_body_bytes`` bytes per response.
+        ``["<all_urls>"]``.
+
+        The returned capture buffers per-request envelopes (URL, method,
+        status code, request and response headers, peer IP, error
+        string, started/completed timestamps) until
+        :meth:`browser_network_capture_stop` is called.
+
+        ``capture_response_body`` requests body streaming via
+        ``webRequest.filterResponseData``. On Tor Browser 15.x / Firefox
+        140 ESR the filter's ``ondata`` callback does not deliver bytes
+        for matching responses, so the ``response_body`` field in each
+        envelope is typically empty or ``None``; the rest of the
+        envelope is populated as documented. Workflows that need actual
+        response bytes should use the ``proxy-intercept`` capability,
+        which sees wire traffic before the browser decrypts it.
+        ``max_body_bytes`` caps any bytes that do arrive.
 
         Captures whose URL sets overlap an already-running capture are
         rejected with :class:`ValueError` to keep the per-request
@@ -604,10 +617,18 @@ class _HelperExtensionCapabilityMixin:
     def browser_network_capture_stop(self, capture_id: str) -> dict[str, Any]:
         """Stop ``capture_id`` and return the assembled per-request envelopes.
 
+        Returns ``{"capture_id": str, "entries": list[dict]}``. Each
+        entry carries URL, method, status code, request and response
+        headers, peer IP, error string, and started/completed
+        timestamps. ``response_body`` is populated only when the
+        platform actually delivers bytes through
+        ``filterResponseData.ondata`` (see
+        :meth:`browser_network_capture_start` for the TB 15.x caveat).
+
         Raises :class:`ValueError` if ``capture_id`` is unknown. The
         extension-side listeners are removed before the entries are
         flushed; late events that arrive after stop are dropped on the
-        floor (they hit ``_route_event`` with a missing capture).
+        floor.
         """
 
         captures = self._captures_map()
@@ -682,16 +703,23 @@ class _HelperExtensionCapabilityMixin:
         Modes are mutually exclusive; exactly one must be selected:
 
         * **Mock** -- ``body`` is set. The extension answers matching
-          requests by redirecting them to a synthesised ``data:`` URL
-          carrying ``body`` and ``content_type``. Firefox treats the
-          redirect target as a new request whose status is ``200`` and
-          whose only header is the URL's ``Content-Type``. The supplied
-          ``status`` and ``headers`` are stored on the route entry for
-          echo via :meth:`browser_route_list` but **do not** reach the
-          page. Workflows that need arbitrary status codes or response
-          headers should use ``proxy-intercept``.
+          requests by returning ``redirectUrl`` pointing at a
+          synthesised ``data:`` URL carrying ``body`` and
+          ``content_type``. A ``data:`` redirect cannot carry custom
+          HTTP status or arbitrary response headers, so the supplied
+          ``status`` and ``headers`` are recorded on the route entry for
+          echo via :meth:`browser_route_list` but do not affect the
+          response the page observes. On Tor Browser 15.x / Firefox 140
+          ESR the ``data:``-URL redirect itself currently fails to
+          deliver the synthesised body to page-context ``fetch()`` of
+          subresources -- the call rejects with a network error even
+          though the route is registered and evaluated. Workflows that
+          need real response mocking, custom status codes, or arbitrary
+          response headers should use the ``proxy-intercept``
+          capability.
         * **Redirect** -- ``redirect_url`` is set. The blocking
           ``onBeforeRequest`` listener returns ``{redirectUrl: ...}``.
+          Works end-to-end against ``http(s)://`` targets.
         * **Header rewrite** -- any of ``set_request_headers``,
           ``remove_request_headers``, ``set_response_headers``,
           ``remove_response_headers`` is set. Implemented via
@@ -821,11 +849,12 @@ class _HelperExtensionCapabilityMixin:
         blocking ``webRequest.onBeforeRequest`` listener that returns
         ``{cancel: true}`` for every URL, blocking new request
         initiation. In-flight requests already past ``onBeforeRequest``
-        continue to completion -- this matches
-        ``playwright-mcp``'s offline-mode semantics. Transitioning back
-        to ``"online"`` removes the listener. ``navigator.onLine`` is
-        not toggled; pages that gate retries on that signal will not
-        observe the offline state.
+        are not aborted and continue to completion. The extension's
+        own long-poll traffic to the driver-side bridge is exempted so
+        the transition back to ``"online"`` can be delivered.
+        Transitioning to ``"online"`` removes the cancel listener.
+        ``navigator.onLine`` is not toggled; pages that gate retries on
+        that signal will not observe the offline state.
         """
 
         if state not in ("online", "offline"):
