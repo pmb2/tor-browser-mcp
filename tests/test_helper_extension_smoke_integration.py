@@ -341,16 +341,21 @@ def test_helper_extension_init_script_runs_at_document_start(
 def test_helper_extension_routes_fetch_to_mocked_body(
     drv: TorBrowserDriver,
 ) -> None:
-    """A mock route answers a page-context fetch with the synthesised body.
+    """A mock route answers a page-context fetch with the registered body.
 
-    Exercises the data:-URL deliverability gate documented in the
-    design: ``onBeforeRequest`` returns ``redirectUrl=data:...`` and
-    Firefox treats the redirect target as the subresource response
-    body. After unrouting, the same fetch must fail with a network
-    error.
+    The driver registers the mock body on the bridge's ``/mock/<id>``
+    endpoint and tells the extension to redirect matching requests
+    there. After unrouting, the same fetch must fail because the
+    redirect rule is gone and ``example.invalid`` does not resolve.
+
+    The page is loaded from the bridge's own ``/host`` endpoint so the
+    fetch and the redirect's terminal target both sit on the bridge
+    origin -- ``data:`` URL documents cannot make cross-origin
+    page-context fetches in Tor Browser, which would otherwise mask
+    the mock-mode behaviour under network errors.
     """
 
-    drv.browser_navigate(_data_url("<html><body>host</body></html>"))
+    drv.browser_navigate(f"http://127.0.0.1:{drv._helper_bridge.port}/host")
 
     route = drv.browser_route(
         "*://example.invalid/*",
@@ -358,6 +363,7 @@ def test_helper_extension_routes_fetch_to_mocked_body(
         content_type="text/plain",
     )
     route_id = route["route_id"]
+    assert isinstance(route_id, str) and route_id
 
     listed = drv.browser_route_list()
     assert any(r["route_id"] == route_id for r in listed)
@@ -372,12 +378,10 @@ def test_helper_extension_routes_fetch_to_mocked_body(
           .catch(function (e) { cb({ok: false, error: String(e)}); });
         """
     )
-
-    if not (isinstance(page_body, dict) and page_body.get("ok") and page_body.get("body") == "ok"):
-        pytest.xfail(
-            "data:-URL redirect from onBeforeRequest did not deliver mocked "
-            f"body on this TB build; got {page_body!r}"
-        )
+    assert isinstance(page_body, dict) and page_body.get("ok") is True, (
+        f"fetch should resolve to the mocked body, got {page_body!r}"
+    )
+    assert page_body.get("body") == "ok", page_body
 
     removed = drv.browser_unroute(pattern="*://example.invalid/*")
     assert removed == {"removed": 1}
@@ -394,6 +398,57 @@ def test_helper_extension_routes_fetch_to_mocked_body(
     assert isinstance(after, dict) and after.get("ok") is False, (
         f"fetch should fail with a network error after unroute, got {after!r}"
     )
+
+
+def test_helper_extension_mock_serves_custom_status_and_headers(
+    drv: TorBrowserDriver,
+) -> None:
+    """Mock-mode delivers arbitrary status, headers, and body.
+
+    Bridge-served mocks carry the full HTTP envelope -- the page
+    observes the registered status code and any user-supplied headers
+    alongside the response body.
+    """
+
+    drv.browser_navigate(f"http://127.0.0.1:{drv._helper_bridge.port}/host")
+
+    route = drv.browser_route(
+        "*://example.invalid/*",
+        status=404,
+        body='{"error":"not found"}',
+        content_type="application/json",
+        headers={"X-Test-Header": "tor-browser-mcp"},
+    )
+    route_id = route["route_id"]
+    try:
+        drv.webdriver.set_script_timeout(15)
+        observed = drv.webdriver.execute_async_script(
+            """
+            const cb = arguments[arguments.length - 1];
+            fetch('http://example.invalid/lookup', {cache: 'no-store'})
+              .then(function (r) {
+                return r.text().then(function (text) {
+                  return {
+                    ok: true,
+                    status: r.status,
+                    body: text,
+                    content_type: r.headers.get('Content-Type'),
+                    custom: r.headers.get('X-Test-Header'),
+                  };
+                });
+              })
+              .catch(function (e) { cb({ok: false, error: String(e)}); })
+              .then(function (v) { cb(v); });
+            """
+        )
+    finally:
+        drv.browser_unroute(route_id=route_id)
+
+    assert isinstance(observed, dict) and observed.get("ok") is True, observed
+    assert observed.get("status") == 404, observed
+    assert observed.get("body") == '{"error":"not found"}', observed
+    assert observed.get("content_type") == "application/json", observed
+    assert observed.get("custom") == "tor-browser-mcp", observed
 
 
 def test_helper_extension_offline_mode_blocks_new_navigation(

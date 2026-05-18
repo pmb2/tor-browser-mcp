@@ -261,8 +261,12 @@ function isBridgeUrl(url) {
 }
 
 function routeOnBeforeRequest(details) {
+  // The driver renders mock-mode routes into redirect-mode pointing
+  // at the bridge's /mock/<id> endpoint, so the extension only needs
+  // a single "redirect" code path here. Header rewrite and offline
+  // are wired through their own listeners.
   if (isBridgeUrl(details.url)) return undefined;
-  const route = findRouteForMode(details.url, ["mock", "redirect"]);
+  const route = findRouteForMode(details.url, ["redirect"]);
   if (!route) return undefined;
   return { redirectUrl: route.redirect_url };
 }

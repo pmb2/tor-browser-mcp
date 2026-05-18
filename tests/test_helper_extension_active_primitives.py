@@ -1,20 +1,20 @@
 """Unit tests for the helper-extension active primitives.
 
-Covers the driver-side route table, the mock data-URL builder, the
-``browser_route`` / ``browser_unroute`` / ``browser_route_list``
-surface, and ``browser_network_state_set``. Everything runs against a
-fake bridge that records outgoing requests; no Firefox is launched.
+Covers the driver-side route table, mock registration against the
+bridge, the ``browser_route`` / ``browser_unroute`` /
+``browser_route_list`` surface, and ``browser_network_state_set``.
+Everything runs against a fake bridge that records outgoing requests
+and mock registrations; no Firefox is launched.
 """
 
 from __future__ import annotations
 
-import base64
+import re
 from typing import Any
 
 import pytest
 
 from torbrowser_driver._helper_extension_primitives import (
-    _build_mock_data_url,
     _HelperExtensionCapabilityMixin,
     _resolve_route_mode,
 )
@@ -27,6 +27,8 @@ class _FakeBridge:
         self.host = "127.0.0.1"
         self.port = 9999
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.mocks: dict[str, dict[str, Any]] = {}
+        self.mock_log: list[tuple[str, str, dict[str, Any]]] = []
 
     def request(self, method: str, params: dict[str, Any] | None = None, timeout: float = 30.0):
         self.calls.append((method, dict(params or {})))
@@ -35,6 +37,25 @@ class _FakeBridge:
     def subscribe(self, name: str, sink) -> None:  # pragma: no cover - unused here
         return None
 
+    def register_mock(
+        self,
+        route_id: str,
+        status: int,
+        headers: dict[str, str] | None,
+        body: bytes,
+    ) -> None:
+        entry = {
+            "status": int(status),
+            "headers": dict(headers or {}),
+            "body": bytes(body),
+        }
+        self.mocks[route_id] = entry
+        self.mock_log.append(("register", route_id, entry))
+
+    def unregister_mock(self, route_id: str) -> None:
+        self.mocks.pop(route_id, None)
+        self.mock_log.append(("unregister", route_id, {}))
+
 
 class _Driver(_HelperExtensionCapabilityMixin):
     def __init__(self, bridge: _FakeBridge | None) -> None:
@@ -42,28 +63,59 @@ class _Driver(_HelperExtensionCapabilityMixin):
         self._helper_addon_id = "helper@tor-browser-mcp.local"
 
 
-# --- mock data-URL builder --------------------------------------------------
+_ROUTE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
-def test_build_mock_data_url_round_trip() -> None:
-    url = _build_mock_data_url(200, "text/plain", "hello world", None)
-    prefix, _, payload = url.partition(",")
-    assert prefix == "data:text/plain;base64"
-    assert base64.b64decode(payload).decode("utf-8") == "hello world"
+# --- _register_mock_on_bridge ------------------------------------------------
 
 
-def test_build_mock_data_url_carries_content_type() -> None:
-    url = _build_mock_data_url(404, "application/json", '{"a":1}', {"X-Foo": "bar"})
-    assert url.startswith("data:application/json;base64,")
-    payload = url.split(",", 1)[1]
-    assert base64.b64decode(payload).decode("utf-8") == '{"a":1}'
+def test_register_mock_on_bridge_returns_bridge_url_and_records_entry() -> None:
+    bridge = _FakeBridge()
+    drv = _Driver(bridge=bridge)
+    url = drv._register_mock_on_bridge(
+        "abc123",
+        200,
+        "hello",
+        "text/plain",
+        None,
+    )
+    assert url == "http://127.0.0.1:9999/mock/abc123"
+    assert bridge.mocks["abc123"] == {
+        "status": 200,
+        "headers": {"Content-Type": "text/plain"},
+        "body": b"hello",
+    }
 
 
-def test_build_mock_data_url_unicode_body() -> None:
-    text = "snowman: \u2603"
-    url = _build_mock_data_url(200, "text/plain", text, None)
-    payload = url.split(",", 1)[1]
-    assert base64.b64decode(payload).decode("utf-8") == text
+def test_register_mock_on_bridge_preserves_explicit_content_type() -> None:
+    bridge = _FakeBridge()
+    drv = _Driver(bridge=bridge)
+    drv._register_mock_on_bridge(
+        "abc",
+        201,
+        '{"a":1}',
+        "text/plain",
+        {"Content-Type": "application/json", "X-Foo": "bar"},
+    )
+    entry = bridge.mocks["abc"]
+    # Explicit Content-Type wins over the content_type kwarg.
+    assert entry["headers"]["Content-Type"] == "application/json"
+    assert entry["headers"]["X-Foo"] == "bar"
+
+
+def test_register_mock_on_bridge_encodes_string_body_as_utf8() -> None:
+    bridge = _FakeBridge()
+    drv = _Driver(bridge=bridge)
+    drv._register_mock_on_bridge("r", 200, "snow \u2603", "text/plain", None)
+    assert bridge.mocks["r"]["body"] == "snow \u2603".encode("utf-8")
+
+
+def test_register_mock_on_bridge_accepts_bytes_body_verbatim() -> None:
+    bridge = _FakeBridge()
+    drv = _Driver(bridge=bridge)
+    payload = bytes(range(256))
+    drv._register_mock_on_bridge("r", 200, payload, None, None)
+    assert bridge.mocks["r"]["body"] == payload
 
 
 # --- mode resolution --------------------------------------------------------
@@ -165,7 +217,7 @@ def test_route_requires_a_mode() -> None:
 # --- browser_route add/list/remove round-trip -------------------------------
 
 
-def test_route_add_mock_calls_bridge_with_data_url_payload() -> None:
+def test_route_add_mock_sends_redirect_mode_pointing_at_bridge() -> None:
     bridge = _FakeBridge()
     drv = _Driver(bridge=bridge)
     result = drv.browser_route(
@@ -174,13 +226,18 @@ def test_route_add_mock_calls_bridge_with_data_url_payload() -> None:
         body="ok",
         content_type="text/plain",
     )
-    assert "route_id" in result
+    route_id = result["route_id"]
+    assert _ROUTE_ID_RE.match(route_id), route_id
     method, params = bridge.calls[-1]
     assert method == "route.add"
-    assert params["mode"] == "mock"
+    # The extension only ever sees redirect-mode; mock-mode is a
+    # driver-side label that collapses to a bridge-served redirect.
+    assert params["mode"] == "redirect"
     assert params["pattern"] == "*://example.com/*"
-    assert params["redirect_url"].startswith("data:text/plain;base64,")
-    assert base64.b64decode(params["redirect_url"].split(",", 1)[1]).decode("utf-8") == "ok"
+    assert params["redirect_url"] == f"http://127.0.0.1:9999/mock/{route_id}"
+    assert bridge.mocks[route_id]["status"] == 200
+    assert bridge.mocks[route_id]["body"] == b"ok"
+    assert bridge.mocks[route_id]["headers"]["Content-Type"] == "text/plain"
 
 
 def test_route_add_redirect_passes_url_through() -> None:
@@ -212,7 +269,13 @@ def test_route_add_headers_passes_edit_lists() -> None:
 
 def test_route_list_echoes_mode_specific_fields() -> None:
     drv = _Driver(bridge=_FakeBridge())
-    drv.browser_route("*://m/*", body="hello", content_type="text/plain")
+    drv.browser_route(
+        "*://m/*",
+        status=418,
+        body="hello",
+        content_type="text/plain",
+        headers={"X-Test": "yes"},
+    )
     drv.browser_route("*://r/*", redirect_url="https://r2/")
     drv.browser_route("*://h/*", set_request_headers={"X": "1"})
 
@@ -222,9 +285,12 @@ def test_route_list_echoes_mode_specific_fields() -> None:
 
     mock_entry = by_pattern["*://m/*"]
     assert mock_entry["mode"] == "mock"
-    assert mock_entry["status"] == 200
+    assert mock_entry["status"] == 418
     assert mock_entry["content_type"] == "text/plain"
     assert mock_entry["body_size"] == len("hello".encode("utf-8"))
+    assert mock_entry["headers"] == {"X-Test": "yes"}
+    # The bridge URL is a driver-internal implementation detail and
+    # must not surface in browser_route_list output.
     assert mock_entry["redirect_url"] is None
 
     redirect_entry = by_pattern["*://r/*"]
@@ -256,7 +322,9 @@ def test_unroute_by_route_id_returns_one() -> None:
     bridge = _FakeBridge()
     drv = _Driver(bridge=bridge)
     rid = drv.browser_route("*://example.com/*", body="x")["route_id"]
+    assert rid in bridge.mocks
     bridge.calls.clear()
+    bridge.mock_log.clear()
 
     result = drv.browser_unroute(route_id=rid)
     assert result == {"removed": 1}
@@ -264,6 +332,8 @@ def test_unroute_by_route_id_returns_one() -> None:
     method, params = bridge.calls[-1]
     assert method == "route.remove"
     assert params["route_ids"] == [rid]
+    assert rid not in bridge.mocks
+    assert any(op == "unregister" and r == rid for op, r, _ in bridge.mock_log)
 
 
 def test_unroute_by_route_id_unknown_returns_zero() -> None:
@@ -274,10 +344,11 @@ def test_unroute_by_route_id_unknown_returns_zero() -> None:
 def test_unroute_by_pattern_removes_all_matching() -> None:
     bridge = _FakeBridge()
     drv = _Driver(bridge=bridge)
-    drv.browser_route("*://example.com/*", body="a")
-    drv.browser_route("*://example.com/*", body="b", priority=5)
-    drv.browser_route("*://other.com/*", body="c")
+    rid_a = drv.browser_route("*://example.com/*", body="a")["route_id"]
+    rid_b = drv.browser_route("*://example.com/*", body="b", priority=5)["route_id"]
+    rid_c = drv.browser_route("*://other.com/*", body="c")["route_id"]
     bridge.calls.clear()
+    bridge.mock_log.clear()
 
     result = drv.browser_unroute(pattern="*://example.com/*")
     assert result == {"removed": 2}
@@ -286,7 +357,10 @@ def test_unroute_by_pattern_removes_all_matching() -> None:
     assert remaining[0]["pattern"] == "*://other.com/*"
     method, params = bridge.calls[-1]
     assert method == "route.remove"
-    assert len(params["route_ids"]) == 2
+    assert set(params["route_ids"]) == {rid_a, rid_b}
+    assert rid_a not in bridge.mocks
+    assert rid_b not in bridge.mocks
+    assert rid_c in bridge.mocks
 
 
 def test_unroute_by_pattern_no_match_returns_zero_and_no_call() -> None:

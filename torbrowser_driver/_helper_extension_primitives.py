@@ -20,6 +20,7 @@ import re
 import secrets
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -91,29 +92,6 @@ def decode_body(buf: bytes) -> str | dict[str, str]:
         return {"base64": base64.b64encode(buf).decode("ascii")}
 
 
-def _build_mock_data_url(
-    status: int,
-    content_type: str,
-    body: str,
-    headers: dict[str, str] | None,
-) -> str:
-    """Synthesise a ``data:`` URL suitable for an ``onBeforeRequest``
-    ``redirectUrl`` return.
-
-    Encodes ``body`` as base64 and produces
-    ``data:<content_type>;base64,<payload>``. ``status`` and ``headers``
-    are accepted for symmetry with the route entry but cannot be
-    carried over a ``data:`` URL: Firefox treats the redirect target
-    as a fresh request whose response status is ``200`` and whose only
-    header is ``Content-Type`` parsed from the URL itself. Callers
-    requiring arbitrary status codes or response headers should use
-    the ``proxy-intercept`` capability.
-    """
-
-    payload = base64.b64encode(body.encode("utf-8")).decode("ascii")
-    return f"data:{content_type};base64,{payload}"
-
-
 def _now_ms() -> float:
     return time.time() * 1000.0
 
@@ -168,10 +146,14 @@ class _RouteEntry:
         """Render as a JSON-safe descriptor for ``browser_route_list``.
 
         Mock-mode bodies are not echoed verbatim; ``body_size`` is
-        surfaced instead to keep tool output bounded.
+        surfaced instead to keep tool output bounded. ``redirect_url``
+        on a mock entry is omitted -- the driver-internal value points
+        at the bridge's localhost ``/mock/<id>`` URL, which is an
+        implementation detail callers should not see.
         """
 
         body_size = len(self.body.encode("utf-8")) if self.body is not None else None
+        echoed_redirect = self.redirect_url if self.mode == "redirect" else None
         return {
             "route_id": self.route_id,
             "pattern": self.pattern,
@@ -180,7 +162,8 @@ class _RouteEntry:
             "status": self.status,
             "body_size": body_size,
             "content_type": self.content_type,
-            "redirect_url": self.redirect_url,
+            "headers": dict(self.headers) if self.headers else None,
+            "redirect_url": echoed_redirect,
             "set_request_headers": (
                 dict(self.set_request_headers) if self.set_request_headers else None
             ),
@@ -196,27 +179,30 @@ class _RouteEntry:
         }
 
     def to_extension_payload(self) -> dict[str, Any]:
-        """Serialise the full route descriptor for the background page.
+        """Serialise the route descriptor for the background page.
 
-        The extension mirrors this descriptor in-process so its blocking
-        listeners can evaluate routes without a bridge round-trip.
+        The extension only ever sees three concrete shapes: redirect,
+        header-rewrite, and offline. Mock-mode routes are projected
+        into ``"redirect"`` mode pointing at the bridge's ``/mock/<id>``
+        endpoint -- the bridge serves the mock body over HTTP from
+        localhost, which is reachable from page context and not
+        subject to the ``data:``-URL deliverability gap that affects
+        Firefox 140 ESR. The driver-side ``mode`` field stays
+        ``"mock"`` for echo purposes only.
         """
 
+        if self.mode == "mock":
+            extension_mode = "redirect"
+        else:
+            extension_mode = self.mode
         payload: dict[str, Any] = {
             "route_id": self.route_id,
             "pattern": self.pattern,
-            "mode": self.mode,
+            "mode": extension_mode,
             "priority": self.priority,
             "insertion_index": self.insertion_index,
         }
-        if self.mode == "mock":
-            payload["redirect_url"] = _build_mock_data_url(
-                self.status if self.status is not None else 200,
-                self.content_type or "text/plain",
-                self.body or "",
-                self.headers,
-            )
-        elif self.mode == "redirect":
+        if self.mode in ("mock", "redirect"):
             payload["redirect_url"] = self.redirect_url
         else:
             payload["set_request_headers"] = (
@@ -647,6 +633,34 @@ class _HelperExtensionCapabilityMixin:
             key=lambda r: (-r.priority, r.insertion_index),
         )
 
+    def _register_mock_on_bridge(
+        self,
+        route_id: str,
+        status: int,
+        body: str | bytes,
+        content_type: str | None,
+        headers: dict[str, str] | None,
+    ) -> str:
+        """Publish a mock entry on the bridge and return its URL.
+
+        The bridge serves ``/mock/<route_id>`` unauthenticated; the
+        route_id's entropy is the access control. The returned URL is
+        what the extension is told to redirect matching requests to.
+        """
+
+        if isinstance(body, str):
+            body_bytes = body.encode("utf-8")
+        else:
+            body_bytes = bytes(body)
+        headers_out: dict[str, str] = dict(headers or {})
+        if content_type and not any(
+            k.lower() == "content-type" for k in headers_out
+        ):
+            headers_out["Content-Type"] = content_type
+        bridge = self._helper_bridge_or_raise()
+        bridge.register_mock(route_id, int(status), headers_out, body_bytes)
+        return f"http://{bridge.host}:{bridge.port}/mock/{route_id}"
+
     def _ensure_event_subscribers(self, bridge: "HelperBridge") -> None:
         if getattr(self, "_helper_subscribers_installed", False):
             return
@@ -915,20 +929,17 @@ class _HelperExtensionCapabilityMixin:
         Modes are mutually exclusive; exactly one must be selected:
 
         * **Mock** -- ``body`` is set. The extension answers matching
-          requests by returning ``redirectUrl`` pointing at a
-          synthesised ``data:`` URL carrying ``body`` and
-          ``content_type``. A ``data:`` redirect cannot carry custom
-          HTTP status or arbitrary response headers, so the supplied
-          ``status`` and ``headers`` are recorded on the route entry for
-          echo via :meth:`browser_route_list` but do not affect the
-          response the page observes. On Tor Browser 15.x / Firefox 140
-          ESR the ``data:``-URL redirect itself currently fails to
-          deliver the synthesised body to page-context ``fetch()`` of
-          subresources -- the call rejects with a network error even
-          though the route is registered and evaluated. Workflows that
-          need real response mocking, custom status codes, or arbitrary
-          response headers should use the ``proxy-intercept``
-          capability.
+          requests by returning ``redirectUrl`` pointing at the
+          driver-side bridge's localhost ``/mock/<route_id>`` endpoint,
+          which serves ``body`` with the supplied ``status``,
+          ``content_type``, and ``headers``. Arbitrary status codes
+          and response headers are supported; the page observes the
+          response as if the origin had returned it. The mock body
+          travels over loopback, never through tor, and never reaches
+          ``proxy-intercept``'s flow buffer -- mocks are local-only.
+          ``proxy-intercept`` is only needed for mocking traffic the
+          helper extension cannot see (document-parser subresources,
+          WebSocket frames).
         * **Redirect** -- ``redirect_url`` is set. The blocking
           ``onBeforeRequest`` listener returns ``{redirectUrl: ...}``.
           Works end-to-end against ``http(s)://`` targets.
@@ -972,7 +983,13 @@ class _HelperExtensionCapabilityMixin:
                 raise ValueError("redirect_url must be a non-empty string")
 
         bridge = self._helper_bridge_or_raise()
-        route_id = secrets.token_hex(8)
+        route_id = uuid.uuid4().hex
+        bridge_redirect_url: str | None = None
+        if mode == "mock":
+            assert isinstance(body, str)
+            bridge_redirect_url = self._register_mock_on_bridge(
+                route_id, status, body, content_type, headers
+            )
         entry = _RouteEntry(
             route_id=route_id,
             pattern=pattern,
@@ -983,7 +1000,10 @@ class _HelperExtensionCapabilityMixin:
             body=body if mode == "mock" else None,
             content_type=content_type if mode == "mock" else None,
             headers=(dict(headers) if headers and mode == "mock" else None),
-            redirect_url=redirect_url if mode == "redirect" else None,
+            redirect_url=(
+                bridge_redirect_url if mode == "mock"
+                else (redirect_url if mode == "redirect" else None)
+            ),
             set_request_headers=(
                 dict(set_request_headers) if set_request_headers else None
             ),
@@ -1003,6 +1023,8 @@ class _HelperExtensionCapabilityMixin:
             bridge.request("route.add", entry.to_extension_payload())
         except Exception:
             routes.pop(route_id, None)
+            if mode == "mock":
+                bridge.unregister_mock(route_id)
             raise
         return {"route_id": route_id}
 
@@ -1030,11 +1052,17 @@ class _HelperExtensionCapabilityMixin:
             entry = routes.pop(route_id, None)
             if entry is None:
                 return {"removed": 0}
+            if entry.mode == "mock":
+                bridge.unregister_mock(route_id)
             bridge.request("route.remove", {"route_ids": [route_id]})
             return {"removed": 1}
         victims = [rid for rid, r in routes.items() if r.pattern == pattern]
+        victim_modes = [routes[rid].mode for rid in victims]
         for rid in victims:
             routes.pop(rid, None)
+        for rid, victim_mode in zip(victims, victim_modes):
+            if victim_mode == "mock":
+                bridge.unregister_mock(rid)
         if victims:
             bridge.request("route.remove", {"route_ids": victims})
         return {"removed": len(victims)}

@@ -97,6 +97,64 @@ const addonId = arguments[0];
 })();
 """
 
+# Tor Browser's TorDomainIsolator registers as protocol-proxy filter
+# at position 0 and rewrites every page-principal proxy lookup -- even
+# loopback addresses already exempted by ``network.proxy.no_proxies_on``
+# -- to a SOCKS entry so each first-party domain gets its own tor
+# circuit. Page-context fetch to the bridge's localhost ``/mock/<id>``
+# endpoint therefore goes through SOCKS, which refuses loopback
+# destinations, and the fetch surfaces as a network error.
+#
+# The fix: install a second proxy filter at position 100 (runs *after*
+# TorDomainIsolator) that overrides the SOCKS rewrite back to direct
+# for ``127.0.0.1`` / ``localhost`` / ``::1`` URIs only. Every other
+# page-principal request keeps the first-party isolated SOCKS path.
+# The filter is kept alive via a globalThis reference so the chrome
+# script's scope going away does not let it get garbage-collected
+# before unregistration at session teardown.
+_REGISTER_LOOPBACK_FILTER_JS = r"""
+const cb = arguments[arguments.length - 1];
+try {
+  if (!globalThis.__tbm_helper_loopback_filter) {
+    const pps = Cc["@mozilla.org/network/protocol-proxy-service;1"]
+      .getService(Ci.nsIProtocolProxyService);
+    const filter = {
+      QueryInterface: ChromeUtils.generateQI(["nsIProtocolProxyFilter"]),
+      applyFilter(uri, proxyInfo, callback) {
+        let host = "";
+        try { host = uri.host || ""; } catch (e) { host = ""; }
+        if (host === "127.0.0.1" || host === "localhost" || host === "::1") {
+          callback.onProxyFilterResult(null);
+          return;
+        }
+        callback.onProxyFilterResult(proxyInfo);
+      },
+    };
+    pps.registerFilter(filter, 100);
+    globalThis.__tbm_helper_loopback_filter = filter;
+  }
+  cb({ ok: true });
+} catch (e) {
+  cb({ ok: false, error: String(e), stack: e && e.stack ? String(e.stack) : null });
+}
+"""
+
+_UNREGISTER_LOOPBACK_FILTER_JS = r"""
+const cb = arguments[arguments.length - 1];
+try {
+  const filter = globalThis.__tbm_helper_loopback_filter;
+  if (filter) {
+    const pps = Cc["@mozilla.org/network/protocol-proxy-service;1"]
+      .getService(Ci.nsIProtocolProxyService);
+    pps.unregisterFilter(filter);
+    delete globalThis.__tbm_helper_loopback_filter;
+  }
+  cb({ ok: true });
+} catch (e) {
+  cb({ ok: false, error: String(e) });
+}
+"""
+
 
 def _session_dir(driver: Any) -> Path:
     session_dir = getattr(driver, "_session_dir", None)
@@ -250,6 +308,7 @@ def install_helper(
         bridge.close()
         raise
     driver._helper_addon_id = addon_id
+    _register_loopback_filter(selenium_driver)
 
     signalled = bridge.connect_event.wait(_BRIDGE_HANDSHAKE_TIMEOUT)
     if not signalled:
@@ -285,8 +344,49 @@ def uninstall_helper(
 
     addon_id = getattr(driver, "_helper_addon_id", None)
     selenium_driver = getattr(driver, "webdriver", None)
+    if selenium_driver is not None:
+        _unregister_loopback_filter(selenium_driver)
     if addon_id is not None and selenium_driver is not None:
         _uninstall_via_chrome(selenium_driver, addon_id)
     driver._helper_addon_id = None
     with contextlib.suppress(Exception):
         bridge.close()
+
+
+def _register_loopback_filter(selenium_driver: Any) -> None:
+    """Register the chrome-context loopback proxy filter. Best-effort.
+
+    Failure logs at warning level but does not raise -- the helper's
+    capture and routing primitives still work without it; only
+    mock-mode's bridge-served redirect target depends on page-context
+    loopback reachability.
+    """
+
+    with contextlib.suppress(Exception):
+        selenium_driver.set_context("chrome")
+        try:
+            selenium_driver.set_script_timeout(10)
+            result = selenium_driver.execute_async_script(
+                _REGISTER_LOOPBACK_FILTER_JS
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                selenium_driver.set_context("content")
+        if not isinstance(result, dict) or not result.get("ok"):
+            log.warning(
+                "helper-extension loopback proxy filter registration failed: %r",
+                result,
+            )
+
+
+def _unregister_loopback_filter(selenium_driver: Any) -> None:
+    """Unregister the loopback proxy filter. Best-effort on teardown."""
+
+    with contextlib.suppress(Exception):
+        selenium_driver.set_context("chrome")
+        try:
+            selenium_driver.set_script_timeout(5)
+            selenium_driver.execute_async_script(_UNREGISTER_LOOPBACK_FILTER_JS)
+        finally:
+            with contextlib.suppress(Exception):
+                selenium_driver.set_context("content")

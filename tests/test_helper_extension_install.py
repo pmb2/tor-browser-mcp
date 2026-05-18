@@ -157,11 +157,13 @@ def test_install_helper_invokes_chrome_context_and_records_id(
     assert driver._helper_addon_id == "addon-xyz"
     driver.webdriver.set_context.assert_any_call("chrome")
     driver.webdriver.set_context.assert_any_call("content")
-    driver.webdriver.execute_async_script.assert_called_once()
-    args, _kwargs = driver.webdriver.execute_async_script.call_args
-    # Second positional arg is the XPI path forwarded to AddonManager.
+    # Two chrome-context calls: AddonManager.installTemporaryAddon and
+    # nsIProtocolProxyService.registerFilter for the loopback override.
+    assert driver.webdriver.execute_async_script.call_count == 2
+    install_args, _ = driver.webdriver.execute_async_script.call_args_list[0]
+    # Second positional arg of the install call is the XPI path.
     expected_path = str(session_dir / "helper-extension.xpi")
-    assert args[1] == expected_path
+    assert install_args[1] == expected_path
 
 
 def test_install_helper_grants_private_browsing_permission(
@@ -181,12 +183,12 @@ def test_install_helper_grants_private_browsing_permission(
     bridge = _FakeBridge()
     install_helper(driver, MagicMock(name="config"), bridge)
 
-    args, _kwargs = driver.webdriver.execute_async_script.call_args
-    script_body = args[0]
+    install_args, _ = driver.webdriver.execute_async_script.call_args_list[0]
+    script_body = install_args[0]
     assert "ExtensionPermissions.add" in script_body
     assert "internal:privateBrowsingAllowed" in script_body
     # The addon id is the third positional argument (script, xpi_path, addon_id).
-    assert args[2] == HELPER_EXTENSION_ID
+    assert install_args[2] == HELPER_EXTENSION_ID
 
 
 def test_install_helper_token_mismatch_raises(

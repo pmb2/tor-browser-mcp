@@ -363,6 +363,120 @@ def test_close_unblocks_pending_polls(bridge_factory) -> None:
     assert elapsed_box[0] < 1.0, f"close did not unblock poll quickly: {elapsed_box[0]:.2f}s"
 
 
+def test_mock_endpoint_returns_registered_body(bridge_factory) -> None:
+    bridge = bridge_factory()
+    bridge.register_mock(
+        "a" * 32, 200, {"Content-Type": "text/plain"}, b"ok"
+    )
+    # Mock endpoint is intentionally unauthenticated: page JS
+    # redirected here can't send the bridge's bearer token.
+    conn = _http(bridge)
+    conn.request("GET", "/mock/" + "a" * 32)
+    resp = conn.getresponse()
+    body = resp.read()
+    assert resp.status == 200
+    assert resp.getheader("Content-Type") == "text/plain"
+    assert resp.getheader("Content-Length") == "2"
+    assert body == b"ok"
+
+
+def test_mock_endpoint_returns_404_for_unknown_route_id(bridge_factory) -> None:
+    bridge = bridge_factory()
+    conn = _http(bridge)
+    conn.request("GET", "/mock/" + "b" * 32)
+    resp = conn.getresponse()
+    resp.read()
+    assert resp.status == 404
+
+
+@pytest.mark.parametrize(
+    "bad_path",
+    [
+        "/mock/",
+        "/mock/short",
+        "/mock/UPPER" + "a" * 27,
+        "/mock/!!!badchars!!!" + "a" * 20,
+        "/mock/..%2Fetc%2Fpasswd",
+        "/mock/path/with/slashes",
+    ],
+)
+def test_mock_endpoint_returns_404_for_malformed_route_id(
+    bridge_factory, bad_path: str
+) -> None:
+    bridge = bridge_factory()
+    bridge.register_mock("a" * 32, 200, None, b"x")
+    conn = _http(bridge)
+    conn.request("GET", bad_path)
+    resp = conn.getresponse()
+    resp.read()
+    assert resp.status == 404
+
+
+def test_mock_endpoint_serves_custom_status_and_headers(bridge_factory) -> None:
+    bridge = bridge_factory()
+    bridge.register_mock(
+        "c" * 32,
+        503,
+        {"X-Custom": "val", "Content-Type": "application/json"},
+        b'{"err":1}',
+    )
+    conn = _http(bridge)
+    conn.request("GET", "/mock/" + "c" * 32)
+    resp = conn.getresponse()
+    body = resp.read()
+    assert resp.status == 503
+    assert resp.getheader("X-Custom") == "val"
+    assert resp.getheader("Content-Type") == "application/json"
+    assert body == b'{"err":1}'
+
+
+def test_mock_endpoint_serves_binary_body(bridge_factory) -> None:
+    bridge = bridge_factory()
+    payload = bytes(range(256))
+    bridge.register_mock("d" * 32, 200, None, payload)
+    conn = _http(bridge)
+    conn.request("GET", "/mock/" + "d" * 32)
+    resp = conn.getresponse()
+    body = resp.read()
+    assert resp.status == 200
+    assert resp.getheader("Content-Type") == "application/octet-stream"
+    assert resp.getheader("Content-Length") == str(len(payload))
+    assert body == payload
+
+
+def test_mock_endpoint_register_unregister_roundtrip(bridge_factory) -> None:
+    bridge = bridge_factory()
+    bridge.register_mock("e" * 32, 200, None, b"present")
+    conn = _http(bridge)
+    conn.request("GET", "/mock/" + "e" * 32)
+    resp = conn.getresponse()
+    assert resp.status == 200
+    resp.read()
+    bridge.unregister_mock("e" * 32)
+    conn = _http(bridge)
+    conn.request("GET", "/mock/" + "e" * 32)
+    resp = conn.getresponse()
+    assert resp.status == 404
+    resp.read()
+
+
+def test_concurrent_mock_writes_dont_race(bridge_factory) -> None:
+    bridge = bridge_factory()
+
+    def register(idx: int) -> None:
+        rid = ("%02x" % idx) * 16
+        bridge.register_mock(rid, 200, None, b"x")
+
+    threads = [threading.Thread(target=register, args=(i,)) for i in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=2.0)
+    listed = bridge.list_mocks()
+    assert len(listed) == 10
+    assert len(set(listed)) == 10
+
+
 def test_request_after_disconnect_during_request_raises(bridge_factory) -> None:
     bridge = bridge_factory()
     _hello(bridge).read()
