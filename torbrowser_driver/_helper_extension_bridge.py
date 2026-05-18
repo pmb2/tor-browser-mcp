@@ -83,6 +83,28 @@ class _Handler(BaseHTTPRequestHandler):
             return b""
         return self.rfile.read(length)
 
+    def _drain_body(self) -> None:
+        """Consume any pending request body before replying with an error.
+
+        Without this, BaseHTTPRequestHandler closes the underlying socket
+        while the client is still writing its body. On Windows the
+        resulting RST surfaces in the client as WinError 10053.
+        """
+
+        raw_length = self.headers.get("Content-Length", "0") or "0"
+        try:
+            length = int(raw_length)
+        except ValueError:
+            return
+        if length <= 0:
+            return
+        remaining = min(length, _MAX_BODY_BYTES)
+        while remaining > 0:
+            chunk = self.rfile.read(min(remaining, 4096))
+            if not chunk:
+                return
+            remaining -= len(chunk)
+
     def _send(
         self,
         status: int,
@@ -121,13 +143,16 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler shape
         bridge = self._bridge()
         if bridge.is_closed:
+            self._drain_body()
             self._send(503)
             return
         if not self._authenticate():
+            self._drain_body()
             self._send(401)
             return
         path = self.path.split("?", 1)[0]
         if path not in ("/hello", "/response", "/event"):
+            self._drain_body()
             self._send(404)
             return
         message = self._parse_json_body()
