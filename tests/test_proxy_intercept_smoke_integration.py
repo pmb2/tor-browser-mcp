@@ -1,0 +1,183 @@
+"""Integration smoke for the ``proxy-intercept`` substrate.
+
+Boots a real Tor Browser session with ``proxy-intercept`` enabled,
+navigates through the embedded mitmproxy listener, and confirms the
+recorder buffer saw the request.
+
+Two opt-in gates apply. The first is the usual ``-m integration``
+marker; the second is the ``TBB_ALLOW_DESTRUCTIVE_CAPS=1`` environment
+variable, because enabling the cap installs a CA into the Tor Browser
+install directory via ``policies.json``. The teardown restores the
+prior state, but the side-effect is real enough that a developer
+running ``pytest -m integration`` against a shared TB install should
+have to opt in explicitly.
+
+Ports: SOCKS 9259, control 9260, intercept 9261. The
+``optional-caps`` smoke uses 9254/9255 and the helper-extension smoke
+uses 9256/9257/9258, so these collide with neither.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from pathlib import Path
+from typing import Iterator
+
+import pytest
+
+from torbrowser_driver import (
+    DEFAULT_CAPABILITIES,
+    DriverConfig,
+    PathPolicy,
+    TorBrowserDriver,
+)
+from torbrowser_driver._proxy_intercept_policies import policies_path
+
+
+pytestmark = pytest.mark.integration
+
+
+SOCKS_PORT = 9259
+CONTROL_PORT = 9260
+INTERCEPT_PORT = 9261
+
+
+@pytest.fixture(scope="module")
+def destructive_caps_allowed() -> None:
+    if os.environ.get("TBB_ALLOW_DESTRUCTIVE_CAPS") != "1":
+        pytest.skip("TBB_ALLOW_DESTRUCTIVE_CAPS=1 not set")
+
+
+@pytest.fixture(scope="module")
+def tbb_root() -> Path:
+    raw = os.environ.get("TBB_ROOT")
+    if not raw:
+        pytest.skip("TBB_ROOT not set")
+    root = Path(raw).expanduser().resolve()
+    if not root.is_dir():
+        pytest.skip(f"TBB_ROOT {root} does not exist")
+    return root
+
+
+@pytest.fixture(scope="module")
+def geckodriver_path() -> Path | None:
+    raw = os.environ.get("GECKODRIVER_PATH")
+    if not raw:
+        return None
+    p = Path(raw).expanduser().resolve()
+    if not p.is_file():
+        pytest.skip(f"GECKODRIVER_PATH {p} does not exist")
+    return p
+
+
+def _build_config(
+    tbb_root: Path,
+    geckodriver_path: Path | None,
+    base: Path,
+) -> DriverConfig:
+    policy = PathPolicy.from_config(output_dir=base / "out", cwd=base)
+    return DriverConfig(
+        tbb_root=tbb_root,
+        path_policy=policy,
+        geckodriver_path=geckodriver_path,
+        headless=False,
+        socks_port=SOCKS_PORT,
+        control_port=CONTROL_PORT,
+        intercept_port=INTERCEPT_PORT,
+        enabled_caps=DEFAULT_CAPABILITIES | {"proxy-intercept"},
+    )
+
+
+@pytest.fixture()
+def drv(
+    destructive_caps_allowed: None,
+    tbb_root: Path,
+    geckodriver_path: Path | None,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[TorBrowserDriver]:
+    base = tmp_path_factory.mktemp("proxy-intercept-smoke")
+    config = _build_config(tbb_root, geckodriver_path, base)
+    with TorBrowserDriver(config) as driver:
+        yield driver
+
+
+def test_proxy_intercept_records_https_navigation(drv: TorBrowserDriver) -> None:
+    """A real HTTPS navigation lands in the recorder's flow buffer.
+
+    The HTTP-CONNECT-to-SOCKS5h adapter chains every outbound dial
+    through the bundled tor's SOCKS port, so a captured flow proves
+    interception is wired through the full path. The flow's
+    ``server_address`` is the upstream HTTP-CONNECT adapter on
+    ``127.0.0.1``, not the exit IP; verifying the tor-exit IP belongs
+    to a later slice with the actual routing query surfaced as a tool.
+    """
+
+    manager = drv._proxy_manager
+    assert manager is not None
+    assert manager.is_alive(), "intercept thread should be alive"
+    assert manager.listen_port == INTERCEPT_PORT
+    assert manager.socks_adapter_port > 0
+
+    drv.browser_navigate("https://example.com/")
+
+    deadline = time.monotonic() + 30.0
+    matching: list[dict] = []
+    while time.monotonic() < deadline:
+        flows = list(manager.flow_buffer)
+        matching = [
+            f
+            for f in flows
+            if f.get("request") is not None
+            and f["request"].get("host") == "example.com"
+            and f.get("response") is not None
+            and f["response"].get("status_code") == 200
+        ]
+        if matching:
+            break
+        time.sleep(0.5)
+
+    assert matching, (
+        f"no example.com/200 flow captured; buffer size={len(list(manager.flow_buffer))}, "
+        f"hosts={sorted({(f.get('request') or {}).get('host') for f in manager.flow_buffer})!r}"
+    )
+    entry = matching[-1]
+    assert entry["request"]["scheme"] == "https"
+    assert entry["request"]["method"] == "GET"
+    addr = entry.get("server_address")
+    assert addr is not None and addr[0]
+
+
+def test_proxy_intercept_restores_policies_on_close(
+    destructive_caps_allowed: None,
+    tbb_root: Path,
+    geckodriver_path: Path | None,
+    tmp_path: Path,
+) -> None:
+    """policies.json is installed during the session and removed after close.
+
+    Two consecutive sessions confirm the snapshot-restore round-trip is
+    idempotent. If the install already has a developer-authored
+    ``policies.json`` the test skips rather than mutating the bundle.
+    """
+
+    target = policies_path(tbb_root)
+    if target.is_file():
+        pytest.skip(
+            f"{target} exists before test; refusing to mutate developer state"
+        )
+
+    config = _build_config(tbb_root, geckodriver_path, tmp_path / "s1")
+    with TorBrowserDriver(config) as driver:
+        assert driver._proxy_ca_pem_path is not None
+        assert target.is_file()
+        data = json.loads(target.read_text("utf-8"))
+        install_list = data["policies"]["Certificates"]["Install"]
+        assert str(driver._proxy_ca_pem_path) in install_list
+    assert not target.exists(), f"{target} should be removed after session 1"
+
+    config2 = _build_config(tbb_root, geckodriver_path, tmp_path / "s2")
+    with TorBrowserDriver(config2) as driver:
+        assert target.is_file()
+    assert not target.exists(), f"{target} should be removed after session 2"

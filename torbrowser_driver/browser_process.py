@@ -46,6 +46,70 @@ from .exceptions import BrowserLaunchError
 log = logging.getLogger(__name__)
 
 
+def _proxy_intercept_prefs_overlay(config: DriverConfig) -> dict[str, Any]:
+    """Return the prefs overlay that replaces direct SOCKS-to-tor wiring.
+
+    When ``proxy-intercept`` is enabled the browser must reach the
+    local mitmproxy listener for both HTTP and HTTPS; mitmproxy then
+    chains upstream through tor's SOCKS port via the in-tree
+    HTTP-CONNECT-to-SOCKS5h adapter. The pref keys split into two
+    groups:
+
+    Keys that replace values from the default prefs:
+      * ``network.proxy.type`` stays at ``1`` (manual proxy).
+      * ``network.proxy.socks`` / ``socks_port`` / ``socks_remote_dns``
+        are cleared so the browser does not bypass mitmproxy.
+      * ``network.security.ports.banned.override`` widens to also
+        whitelist ``intercept_port``.
+      * ``network.dns.disabled`` is turned off. Stock TB disables DNS
+        because every URL is routed through SOCKS5h to tor and the
+        browser must never resolve locally; with an HTTP forward
+        proxy, Firefox passes hostnames to mitmproxy via CONNECT and
+        the URI-fixup path still needs DNS to function.
+      * ``network.proxy.allow_hijacking_localhost`` is turned off so
+        the loopback dial to mitmproxy itself is not recursively
+        routed back through mitmproxy.
+      * ``extensions.torbutton.use_nontor_proxy`` is enabled. TB's
+        ``TorDomainIsolator`` registers as a protocol-proxy filter
+        and rewrites every resolved proxy to a SOCKS entry (so each
+        first-party domain gets its own circuit via SOCKS auth
+        nonces). That filter short-circuits when this pref is set,
+        which is the documented escape hatch for sessions that
+        deliberately use a non-tor proxy. Without it, mitmproxy would
+        be dialled as SOCKS5 and the HTTP CONNECT path never runs.
+
+    Keys new to the overlay:
+      * ``network.proxy.http`` / ``http_port`` / ``ssl`` / ``ssl_port``
+        point at the local intercept listener on ``127.0.0.1``.
+      * ``network.proxy.share_proxy_settings`` keeps the FTP / SOCKS
+        sub-proxies consistent.
+      * ``network.proxy.no_proxies_on`` is emptied so loopback dialup
+        still flows through mitmproxy (the intercept proxy itself
+        listens on loopback; bypassing it would mean missing flows).
+
+    Only valid when ``"proxy-intercept"`` is in ``config.enabled_caps``.
+    """
+
+    return {
+        "network.proxy.type": 1,
+        "network.proxy.socks": "",
+        "network.proxy.socks_port": 0,
+        "network.proxy.socks_remote_dns": False,
+        "network.security.ports.banned.override": (
+            f"{config.socks_port},{config.control_port},{config.intercept_port}"
+        ),
+        "network.dns.disabled": False,
+        "network.proxy.allow_hijacking_localhost": False,
+        "extensions.torbutton.use_nontor_proxy": True,
+        "network.proxy.http": "127.0.0.1",
+        "network.proxy.http_port": config.intercept_port,
+        "network.proxy.ssl": "127.0.0.1",
+        "network.proxy.ssl_port": config.intercept_port,
+        "network.proxy.share_proxy_settings": True,
+        "network.proxy.no_proxies_on": "",
+    }
+
+
 def _load_bearing_prefs(config: DriverConfig) -> dict[str, Any]:
     """Return the prefs that actually drive the TB-over-tor wiring.
 
@@ -137,6 +201,8 @@ def _load_bearing_prefs(config: DriverConfig) -> dict[str, Any]:
         # fires; co-locating the extension with the network stack
         # restores the byte stream.
         prefs["extensions.webextensions.remote"] = False
+    if "proxy-intercept" in config.enabled_caps:
+        prefs.update(_proxy_intercept_prefs_overlay(config))
     return prefs
 
 

@@ -30,6 +30,12 @@ from ._highlight_primitives import _HighlightCapabilityMixin
 from ._http_over_tor_primitives import _HttpOverTorCapabilityMixin
 from ._network_observe_primitives import _NetworkObserveCapabilityMixin
 from ._pdf_primitives import _PdfCapabilityMixin
+from ._proxy_intercept_ca import generate_session_ca
+from ._proxy_intercept_policies import (
+    install_certificate_policy,
+    restore_certificate_policy,
+)
+from ._proxy_intercept_substrate import ProxyManager
 from ._state_primitives import _StateCapabilityMixin
 from ._tor_primitives import _TorCapabilityMixin
 from ._tor_routing_primitives import _TorRoutingCapabilityMixin
@@ -37,7 +43,7 @@ from ._unsafe_primitives import _UnsafeCapabilityMixin
 from ._vision_primitives import _VisionCapabilityMixin
 from .browser_process import launch_browser
 from .config import DriverConfig
-from .exceptions import BrowserLaunchError
+from .exceptions import BrowserLaunchError, ProxyInterceptError
 from .tor_process import launch_tor, shutdown_tor
 
 log = logging.getLogger(__name__)
@@ -85,6 +91,10 @@ class TorBrowserDriver(
         self._closed = False
         self._helper_bridge: HelperBridge | None = None
         self._helper_addon_id: str | None = None
+        self._proxy_manager: ProxyManager | None = None
+        self._proxy_ca_pem_path: Path | None = None
+        self._proxy_ca_fingerprint: str | None = None
+        self._policies_snapshot_dir: Path | None = None
 
     def __enter__(self) -> "TorBrowserDriver":
         self._session_dir = Path(tempfile.mkdtemp(prefix="torbrowser-driver-"))
@@ -112,6 +122,8 @@ class TorBrowserDriver(
                         f"helper-extension bridge failed to bind "
                         f"{self._helper_bridge.host}:{self._helper_bridge.port}: {exc}"
                     ) from exc
+            if "proxy-intercept" in config.enabled_caps:
+                self._start_proxy_intercept(config)
             self.webdriver, _ = launch_browser(
                 config, session_dir=self._session_dir
             )
@@ -121,6 +133,65 @@ class TorBrowserDriver(
             self.close()
             raise
         return self
+
+    def _start_proxy_intercept(self, config: DriverConfig) -> None:
+        """Generate the CA, install policies.json, and boot the intercept proxy.
+
+        Pre-probes the tor SOCKS endpoint so a tor-bootstrap failure
+        surfaces as a clear error rather than a downstream mitmproxy
+        upstream failure. ``self._proxy_manager``,
+        ``self._proxy_ca_pem_path``, ``self._proxy_ca_fingerprint``,
+        and ``self._policies_snapshot_dir`` are populated on success.
+        """
+
+        assert self._session_dir is not None
+        session_dir = self._session_dir
+
+        ca_dir = session_dir / "intercept-ca"
+        ca_pem_path, fingerprint = generate_session_ca(ca_dir)
+        self._proxy_ca_pem_path = ca_pem_path
+        self._proxy_ca_fingerprint = fingerprint
+
+        snapshot_dir = session_dir / "policies-snapshot"
+        install_certificate_policy(
+            tbb_root=config.tbb_root,
+            ca_pem_path=ca_pem_path,
+            snapshot_dir=snapshot_dir,
+        )
+        self._policies_snapshot_dir = snapshot_dir
+
+        self._probe_socks_reachable("127.0.0.1", config.socks_port)
+
+        manager = ProxyManager(
+            listen_host="127.0.0.1",
+            listen_port=config.intercept_port,
+            socks_host="127.0.0.1",
+            socks_port=config.socks_port,
+            max_flows=1000,
+            ca_dir=ca_dir,
+        )
+        manager.start()
+        self._proxy_manager = manager
+
+    @staticmethod
+    def _probe_socks_reachable(host: str, port: int) -> None:
+        """Open a transient TCP connect to ``host:port`` to confirm tor is up.
+
+        The probe is intentionally minimal: it asserts the SOCKS
+        listener accepts TCP. The full SOCKS handshake happens later
+        when mitmproxy dials its first flow.
+        """
+
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.settimeout(5.0)
+        try:
+            probe.connect((host, port))
+        except OSError as exc:
+            raise ProxyInterceptError(
+                f"tor SOCKS endpoint {host}:{port} is not reachable: {exc}"
+            ) from exc
+        finally:
+            probe.close()
 
     @staticmethod
     def _allocate_localhost_port(host: str) -> int:
@@ -164,6 +235,23 @@ class TorBrowserDriver(
             with suppress(Exception):
                 uninstall_helper(self, self.config, self._helper_bridge)
             self._helper_bridge = None
+
+        if self._proxy_manager is not None:
+            try:
+                self._proxy_manager.stop()
+            except Exception:
+                log.exception("intercept proxy stop raised during teardown")
+            self._proxy_manager = None
+
+        if self._policies_snapshot_dir is not None:
+            try:
+                restore_certificate_policy(
+                    tbb_root=self.config.tbb_root,
+                    snapshot_dir=self._policies_snapshot_dir,
+                )
+            except Exception:
+                log.exception("policies.json restore raised during teardown")
+            self._policies_snapshot_dir = None
 
         if self.webdriver is not None:
             with suppress(Exception):
