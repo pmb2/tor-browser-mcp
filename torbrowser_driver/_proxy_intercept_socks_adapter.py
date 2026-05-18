@@ -14,15 +14,35 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
-
-from python_socks import ProxyConnectionError, ProxyError, ProxyTimeoutError, ProxyType
-from python_socks.async_.asyncio import Proxy
+from typing import Any, Optional
 
 from .exceptions import ProxyInterceptError
 
 
 log = logging.getLogger(__name__)
+
+
+# Lazy module-level slot for ``python_socks.async_.asyncio.Proxy``.
+# Populated on first dial so ``import torbrowser_driver`` does not depend
+# on the optional ``proxy-intercept`` extra. Tests may override this
+# attribute directly via ``unittest.mock.patch``.
+Proxy: Any = None
+
+
+def _load_python_socks_proxy() -> Any:
+    """Import ``python_socks.async_.asyncio.Proxy`` on first call.
+
+    Caches the resolved class on the module so subsequent calls (and
+    ``unittest.mock.patch`` targets) see a populated attribute. Tests
+    that pre-patch ``Proxy`` short-circuit the import entirely.
+    """
+
+    global Proxy
+    if Proxy is None:
+        from python_socks.async_.asyncio import Proxy as _ProxyImpl
+
+        Proxy = _ProxyImpl
+    return Proxy
 
 
 _MAX_REQUEST_BYTES = 16 * 1024
@@ -140,7 +160,15 @@ class SocksHttpConnectAdapter:
             return
         dest_host, dest_port = dest
 
-        proxy = Proxy(
+        from python_socks import (
+            ProxyConnectionError,
+            ProxyError,
+            ProxyTimeoutError,
+            ProxyType,
+        )
+
+        proxy_cls = _load_python_socks_proxy()
+        proxy = proxy_cls(
             proxy_type=ProxyType.SOCKS5,
             host=self._socks_host,
             port=self._socks_port,

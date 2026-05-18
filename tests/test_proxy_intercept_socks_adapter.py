@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import subprocess
+import sys
+import textwrap
 from unittest.mock import patch
 
 import pytest
@@ -53,6 +56,49 @@ async def _http_request(host: str, port: int, payload: bytes) -> bytes:
     except Exception:
         pass
     return data
+
+
+def test_import_torbrowser_driver_without_python_socks() -> None:
+    """``import torbrowser_driver`` must not require python_socks.
+
+    Regression test for the base-install breakage where
+    ``_proxy_intercept_socks_adapter`` imported python_socks at module
+    top, transitively chained through ``_proxy_intercept_substrate``
+    and ``driver.py``, and turned ``import torbrowser_driver`` into a
+    hard failure for users who installed without the optional
+    ``[proxy-intercept]`` extra. The fix pushes the python_socks (and
+    mitmproxy) imports into the call sites that actually dial.
+
+    Runs in a subprocess with the optional extras blocked via
+    ``sys.modules[name] = None`` sentinels so the result is independent
+    of whether the running test session has already imported them.
+    """
+
+    script = textwrap.dedent(
+        """
+        import sys
+        for name in (
+            "python_socks",
+            "python_socks.async_",
+            "python_socks.async_.asyncio",
+            "mitmproxy",
+            "mitmproxy.http",
+            "mitmproxy.tools.dump",
+        ):
+            sys.modules[name] = None
+        import torbrowser_driver
+        assert torbrowser_driver.TorBrowserDriver is not None
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"import torbrowser_driver failed without optional extras:\n"
+        f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
+    )
 
 
 def test_actual_port_unset_before_serve() -> None:
