@@ -280,6 +280,10 @@ EXPECTED_HELPER_EXTENSION_METHODS = {
     "browser_network_capture_stop",
     "browser_add_init_script",
     "browser_remove_init_script",
+    "browser_route",
+    "browser_unroute",
+    "browser_route_list",
+    "browser_network_state_set",
 }
 
 

@@ -23,6 +23,13 @@ let bridgeHeaders = null;
 
 const captures = new Map();
 const initScripts = new Map();
+// Driver-controlled route table. Keyed by route_id. The blocking
+// listeners walk this in (descending priority, ascending insertion
+// index) order and apply the first matching entry.
+const routes = new Map();
+// Active state for browser_network_state_set. When true, the offline
+// listener is installed and cancels every new request.
+let offlineActive = false;
 // Strong references to live StreamFilter objects. Without this the
 // filter can be reclaimed before Firefox has finished wiring it up to
 // the response channel, which presents as onstart/ondata never firing
@@ -42,6 +49,260 @@ async function loadConfig() {
   const response = await fetch(url);
   return response.json();
 }
+
+function compareRoutes(a, b) {
+  if (a.priority !== b.priority) return b.priority - a.priority;
+  return a.insertion_index - b.insertion_index;
+}
+
+function orderedRoutes() {
+  return Array.from(routes.values()).sort(compareRoutes);
+}
+
+// WebExtension match-pattern matching, JS port. Accepts the literal
+// "<all_urls>" plus the documented <scheme>://<host><path> shapes
+// (schemes: *, http, https, ws, wss, ftp, file; host: *, *.<suffix>,
+// literal, or empty for file://; path is a glob where * matches any
+// number of characters). Mirrors validate_match_pattern on the
+// driver side -- anything that side accepts must match here.
+function parsePattern(pattern) {
+  if (pattern === "<all_urls>") {
+    return { all: true };
+  }
+  const schemeEnd = pattern.indexOf("://");
+  if (schemeEnd <= 0) return null;
+  const scheme = pattern.slice(0, schemeEnd);
+  const rest = pattern.slice(schemeEnd + 3);
+  const pathStart = rest.indexOf("/");
+  if (pathStart < 0) return null;
+  const host = rest.slice(0, pathStart);
+  const path = rest.slice(pathStart);
+  return { all: false, scheme: scheme, host: host, path: path };
+}
+
+function schemeMatches(parsedScheme, urlScheme) {
+  if (parsedScheme === "*") return urlScheme === "http" || urlScheme === "https" || urlScheme === "ws" || urlScheme === "wss" || urlScheme === "ftp";
+  return parsedScheme === urlScheme;
+}
+
+function hostMatches(parsedHost, urlHost) {
+  if (parsedHost === "*") return true;
+  if (parsedHost === "") return urlHost === "";
+  if (parsedHost.startsWith("*.")) {
+    const suffix = parsedHost.slice(2);
+    return urlHost === suffix || urlHost.endsWith("." + suffix);
+  }
+  return parsedHost === urlHost;
+}
+
+function globMatches(pattern, value) {
+  // Convert glob (only * wildcard) to anchored regex.
+  let re = "^";
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === "*") {
+      re += ".*";
+    } else if ("\\.^$+?()[]{}|/".indexOf(ch) >= 0) {
+      re += "\\" + ch;
+    } else {
+      re += ch;
+    }
+  }
+  re += "$";
+  return new RegExp(re).test(value);
+}
+
+function matchPattern(url, pattern) {
+  const parsed = parsePattern(pattern);
+  if (!parsed) return false;
+  if (parsed.all) {
+    return url.startsWith("http://") || url.startsWith("https://") ||
+           url.startsWith("ws://") || url.startsWith("wss://") ||
+           url.startsWith("ftp://") || url.startsWith("file://");
+  }
+  let parsedUrl;
+  try { parsedUrl = new URL(url); } catch (e) { return false; }
+  const urlScheme = parsedUrl.protocol.replace(/:$/, "");
+  if (!schemeMatches(parsed.scheme, urlScheme)) return false;
+  if (!hostMatches(parsed.host, parsedUrl.hostname)) return false;
+  const urlPath = parsedUrl.pathname + parsedUrl.search;
+  return globMatches(parsed.path, urlPath);
+}
+
+function findRouteForMode(url, modes) {
+  for (const route of orderedRoutes()) {
+    if (modes.indexOf(route.mode) < 0) continue;
+    if (matchPattern(url, route.pattern)) return route;
+  }
+  return null;
+}
+
+function isBridgeUrl(url) {
+  return bridgeBase != null && typeof url === "string" && url.indexOf(bridgeBase) === 0;
+}
+
+function routeOnBeforeRequest(details) {
+  if (isBridgeUrl(details.url)) return undefined;
+  const route = findRouteForMode(details.url, ["mock", "redirect"]);
+  if (!route) return undefined;
+  return { redirectUrl: route.redirect_url };
+}
+
+function applyHeaderEdits(headerList, setMap, removeList) {
+  // Case-insensitive remove, then set (replacing existing names case-
+  // insensitively, appending otherwise). Returns a new array.
+  const removeLower = (removeList || []).map(function (n) { return String(n).toLowerCase(); });
+  let kept = (headerList || []).filter(function (h) {
+    return removeLower.indexOf(String(h.name).toLowerCase()) < 0;
+  });
+  if (setMap) {
+    for (const name of Object.keys(setMap)) {
+      const value = String(setMap[name]);
+      const lowerName = name.toLowerCase();
+      let replaced = false;
+      kept = kept.map(function (h) {
+        if (String(h.name).toLowerCase() === lowerName) {
+          replaced = true;
+          return { name: h.name, value: value };
+        }
+        return h;
+      });
+      if (!replaced) {
+        kept.push({ name: name, value: value });
+      }
+    }
+  }
+  return kept;
+}
+
+function routeOnBeforeSendHeaders(details) {
+  if (isBridgeUrl(details.url)) return undefined;
+  const route = findRouteForMode(details.url, ["headers"]);
+  if (!route) return undefined;
+  if (!route.set_request_headers && (!route.remove_request_headers || route.remove_request_headers.length === 0)) {
+    return undefined;
+  }
+  return {
+    requestHeaders: applyHeaderEdits(
+      details.requestHeaders,
+      route.set_request_headers,
+      route.remove_request_headers
+    ),
+  };
+}
+
+function routeOnHeadersReceived(details) {
+  if (isBridgeUrl(details.url)) return undefined;
+  const route = findRouteForMode(details.url, ["headers"]);
+  if (!route) return undefined;
+  if (!route.set_response_headers && (!route.remove_response_headers || route.remove_response_headers.length === 0)) {
+    return undefined;
+  }
+  return {
+    responseHeaders: applyHeaderEdits(
+      details.responseHeaders,
+      route.set_response_headers,
+      route.remove_response_headers
+    ),
+  };
+}
+
+function offlineOnBeforeRequest(details) {
+  // The extension's own long-poll traffic to the driver-side bridge
+  // must continue while offline is engaged; otherwise the call that
+  // toggles state back to online cannot be delivered.
+  if (isBridgeUrl(details.url)) return undefined;
+  return { cancel: true };
+}
+
+function addRoute(params) {
+  const routeId = params.route_id;
+  if (typeof routeId !== "string" || !routeId) {
+    throw new Error("route.add: missing route_id");
+  }
+  routes.set(routeId, {
+    route_id: routeId,
+    pattern: String(params.pattern || ""),
+    mode: String(params.mode || ""),
+    priority: typeof params.priority === "number" ? params.priority : 0,
+    insertion_index: typeof params.insertion_index === "number" ? params.insertion_index : 0,
+    redirect_url: params.redirect_url || null,
+    set_request_headers: params.set_request_headers || null,
+    remove_request_headers: params.remove_request_headers || null,
+    set_response_headers: params.set_response_headers || null,
+    remove_response_headers: params.remove_response_headers || null,
+  });
+  return { added: true, route_id: routeId, count: routes.size };
+}
+
+function removeRoute(params) {
+  const ids = Array.isArray(params.route_ids) ? params.route_ids : [];
+  let removed = 0;
+  for (const id of ids) {
+    if (routes.delete(id)) removed += 1;
+  }
+  return { removed: removed, count: routes.size };
+}
+
+function listRoutes() {
+  return { routes: orderedRoutes().map(function (r) {
+    return {
+      route_id: r.route_id,
+      pattern: r.pattern,
+      mode: r.mode,
+      priority: r.priority,
+      insertion_index: r.insertion_index,
+    };
+  }) };
+}
+
+function clearRoutes() {
+  const n = routes.size;
+  routes.clear();
+  return { removed: n };
+}
+
+function setNetworkState(params) {
+  const state = params && params.state;
+  if (state !== "online" && state !== "offline") {
+    const err = new Error("network_state.set: invalid state " + JSON.stringify(state));
+    err._code = "invalid_state";
+    throw err;
+  }
+  if (state === "offline" && !offlineActive) {
+    browser.webRequest.onBeforeRequest.addListener(
+      offlineOnBeforeRequest,
+      { urls: ["<all_urls>"] },
+      ["blocking"]
+    );
+    offlineActive = true;
+  } else if (state === "online" && offlineActive) {
+    try { browser.webRequest.onBeforeRequest.removeListener(offlineOnBeforeRequest); } catch (e) {}
+    offlineActive = false;
+  }
+  return { state: state };
+}
+
+// Register the routing listeners once at module-parse time. They
+// are no-ops when the route table is empty; their presence keeps the
+// background page alive on event-page builds and avoids the
+// add/remove churn that would otherwise tear down the listener every
+// time the route table empties.
+browser.webRequest.onBeforeRequest.addListener(
+  routeOnBeforeRequest,
+  { urls: ["<all_urls>"] },
+  ["blocking"]
+);
+browser.webRequest.onBeforeSendHeaders.addListener(
+  routeOnBeforeSendHeaders,
+  { urls: ["<all_urls>"] },
+  ["blocking", "requestHeaders"]
+);
+browser.webRequest.onHeadersReceived.addListener(
+  routeOnHeadersReceived,
+  { urls: ["<all_urls>"] },
+  ["blocking", "responseHeaders"]
+);
 
 function bytesToBase64(view) {
   const u8 = view instanceof Uint8Array ? view : new Uint8Array(view);
@@ -281,6 +542,16 @@ async function dispatchRequest(req) {
       return await registerInitScript(params);
     case "init_script.unregister":
       return unregisterInitScript(params);
+    case "route.add":
+      return addRoute(params);
+    case "route.remove":
+      return removeRoute(params);
+    case "route.list":
+      return listRoutes();
+    case "route.clear":
+      return clearRoutes();
+    case "network_state.set":
+      return setNetworkState(params);
     default:
       const err = new Error("unknown method: " + method);
       err._code = "unknown_method";

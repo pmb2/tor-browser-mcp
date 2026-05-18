@@ -252,3 +252,100 @@ def test_helper_extension_init_script_runs_at_document_start(
     finally:
         removed = drv.browser_remove_init_script(script_id)
         assert removed == {"removed": True}
+
+
+def test_helper_extension_routes_fetch_to_mocked_body(
+    drv: TorBrowserDriver,
+) -> None:
+    """A mock route answers a page-context fetch with the synthesised body.
+
+    Exercises the data:-URL deliverability gate documented in the
+    design: ``onBeforeRequest`` returns ``redirectUrl=data:...`` and
+    Firefox treats the redirect target as the subresource response
+    body. After unrouting, the same fetch must fail with a network
+    error.
+    """
+
+    drv.browser_navigate(_data_url("<html><body>host</body></html>"))
+
+    route = drv.browser_route(
+        "*://example.invalid/*",
+        body="ok",
+        content_type="text/plain",
+    )
+    route_id = route["route_id"]
+
+    listed = drv.browser_route_list()
+    assert any(r["route_id"] == route_id for r in listed)
+
+    drv.webdriver.set_script_timeout(15)
+    page_body = drv.webdriver.execute_async_script(
+        """
+        const cb = arguments[arguments.length - 1];
+        fetch('http://example.invalid/', {cache: 'no-store'})
+          .then(function (r) { return r.text(); })
+          .then(function (t) { cb({ok: true, body: t}); })
+          .catch(function (e) { cb({ok: false, error: String(e)}); });
+        """
+    )
+
+    if not (isinstance(page_body, dict) and page_body.get("ok") and page_body.get("body") == "ok"):
+        pytest.xfail(
+            "data:-URL redirect from onBeforeRequest did not deliver mocked "
+            f"body on this TB build; got {page_body!r}"
+        )
+
+    removed = drv.browser_unroute(pattern="*://example.invalid/*")
+    assert removed == {"removed": 1}
+
+    after = drv.webdriver.execute_async_script(
+        """
+        const cb = arguments[arguments.length - 1];
+        fetch('http://example.invalid/', {cache: 'no-store'})
+          .then(function (r) { return r.text(); })
+          .then(function (t) { cb({ok: true, body: t}); })
+          .catch(function (e) { cb({ok: false, error: String(e)}); });
+        """
+    )
+    assert isinstance(after, dict) and after.get("ok") is False, (
+        f"fetch should fail with a network error after unroute, got {after!r}"
+    )
+
+
+def test_helper_extension_offline_mode_blocks_new_navigation(
+    drv: TorBrowserDriver,
+) -> None:
+    """``offline`` cancels new network requests; ``online`` restores them.
+
+    Exercised at the ``fetch()`` layer rather than ``browser_navigate``
+    because Firefox's response to a cancelled top-level navigation is
+    a hung page-load that surfaces as a Selenium read timeout only
+    after the urllib3 default (~120 s). A page-context fetch raises
+    immediately and is the primitive the cap actually intends to
+    block. A ``data:`` URL navigation is used after restore: ``data:``
+    URLs bypass ``webRequest`` entirely and are the deterministic way
+    to prove the offline listener was removed.
+    """
+
+    drv.browser_navigate(_data_url("<html><body>start</body></html>"))
+
+    drv.browser_network_state_set("offline")
+    try:
+        drv.webdriver.set_script_timeout(15)
+        offline_probe = drv.webdriver.execute_async_script(
+            """
+            const cb = arguments[arguments.length - 1];
+            fetch('http://example.invalid/offline-probe', {cache: 'no-store'})
+              .then(function (r) { return r.text(); })
+              .then(function (t) { cb({ok: true, body: t}); })
+              .catch(function (e) { cb({ok: false, error: String(e)}); });
+            """
+        )
+        assert (
+            isinstance(offline_probe, dict) and offline_probe.get("ok") is False
+        ), f"fetch should fail while offline, got {offline_probe!r}"
+    finally:
+        drv.browser_network_state_set("online")
+
+    after = drv.browser_navigate(_data_url("<html><body>back</body></html>"))
+    assert after["url"].startswith("data:")

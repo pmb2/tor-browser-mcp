@@ -15,12 +15,13 @@ emits.
 from __future__ import annotations
 
 import base64
+import itertools
 import re
 import secrets
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from .capabilities import capability
 from .exceptions import HelperUnavailable
@@ -90,6 +91,29 @@ def decode_body(buf: bytes) -> str | dict[str, str]:
         return {"base64": base64.b64encode(buf).decode("ascii")}
 
 
+def _build_mock_data_url(
+    status: int,
+    content_type: str,
+    body: str,
+    headers: dict[str, str] | None,
+) -> str:
+    """Synthesise a ``data:`` URL suitable for an ``onBeforeRequest``
+    ``redirectUrl`` return.
+
+    Encodes ``body`` as base64 and produces
+    ``data:<content_type>;base64,<payload>``. ``status`` and ``headers``
+    are accepted for symmetry with the route entry but cannot be
+    carried over a ``data:`` URL: Firefox treats the redirect target
+    as a fresh request whose response status is ``200`` and whose only
+    header is ``Content-Type`` parsed from the URL itself. Callers
+    requiring arbitrary status codes or response headers should use
+    the ``proxy-intercept`` capability.
+    """
+
+    payload = base64.b64encode(body.encode("utf-8")).decode("ascii")
+    return f"data:{content_type};base64,{payload}"
+
+
 def _now_ms() -> float:
     return time.time() * 1000.0
 
@@ -110,6 +134,139 @@ def _new_entry(request_id: str) -> dict[str, Any]:
         "error": None,
         "ip": None,
     }
+
+
+_ROUTE_MODES = ("mock", "redirect", "headers")
+
+
+@dataclass
+class _RouteEntry:
+    """One installed route in driver-side evaluation order.
+
+    ``insertion_index`` is the tiebreaker when two routes share a
+    ``priority``: the earlier insertion wins.
+    """
+
+    route_id: str
+    pattern: str
+    mode: str
+    priority: int
+    insertion_index: int
+    status: int | None = None
+    body: str | None = None
+    content_type: str | None = None
+    headers: dict[str, str] | None = None
+    redirect_url: str | None = None
+    set_request_headers: dict[str, str] | None = None
+    remove_request_headers: list[str] | None = None
+    set_response_headers: dict[str, str] | None = None
+    remove_response_headers: list[str] | None = None
+
+    def echo(self) -> dict[str, Any]:
+        """Render as a JSON-safe descriptor for ``browser_route_list``.
+
+        Mock-mode bodies are not echoed verbatim; ``body_size`` is
+        surfaced instead to keep tool output bounded.
+        """
+
+        body_size = len(self.body.encode("utf-8")) if self.body is not None else None
+        return {
+            "route_id": self.route_id,
+            "pattern": self.pattern,
+            "mode": self.mode,
+            "priority": self.priority,
+            "status": self.status,
+            "body_size": body_size,
+            "content_type": self.content_type,
+            "redirect_url": self.redirect_url,
+            "set_request_headers": (
+                dict(self.set_request_headers) if self.set_request_headers else None
+            ),
+            "remove_request_headers": (
+                list(self.remove_request_headers) if self.remove_request_headers else None
+            ),
+            "set_response_headers": (
+                dict(self.set_response_headers) if self.set_response_headers else None
+            ),
+            "remove_response_headers": (
+                list(self.remove_response_headers) if self.remove_response_headers else None
+            ),
+        }
+
+    def to_extension_payload(self) -> dict[str, Any]:
+        """Serialise the full route descriptor for the background page.
+
+        The extension mirrors this descriptor in-process so its blocking
+        listeners can evaluate routes without a bridge round-trip.
+        """
+
+        payload: dict[str, Any] = {
+            "route_id": self.route_id,
+            "pattern": self.pattern,
+            "mode": self.mode,
+            "priority": self.priority,
+            "insertion_index": self.insertion_index,
+        }
+        if self.mode == "mock":
+            payload["redirect_url"] = _build_mock_data_url(
+                self.status if self.status is not None else 200,
+                self.content_type or "text/plain",
+                self.body or "",
+                self.headers,
+            )
+        elif self.mode == "redirect":
+            payload["redirect_url"] = self.redirect_url
+        else:
+            payload["set_request_headers"] = (
+                dict(self.set_request_headers) if self.set_request_headers else {}
+            )
+            payload["remove_request_headers"] = list(self.remove_request_headers or [])
+            payload["set_response_headers"] = (
+                dict(self.set_response_headers) if self.set_response_headers else {}
+            )
+            payload["remove_response_headers"] = list(self.remove_response_headers or [])
+        return payload
+
+
+def _resolve_route_mode(
+    body: str | None,
+    redirect_url: str | None,
+    set_request_headers: dict[str, str] | None,
+    remove_request_headers: list[str] | None,
+    set_response_headers: dict[str, str] | None,
+    remove_response_headers: list[str] | None,
+) -> str:
+    """Pick the route mode from the supplied arguments.
+
+    Exactly one of (mock body, redirect URL, header rewrite) must be
+    set; otherwise the caller has expressed an ambiguous route and we
+    raise :class:`ValueError`.
+    """
+
+    has_mock = body is not None
+    has_redirect = redirect_url is not None
+    has_headers = bool(
+        set_request_headers
+        or remove_request_headers
+        or set_response_headers
+        or remove_response_headers
+    )
+    count = int(has_mock) + int(has_redirect) + int(has_headers)
+    if count == 0:
+        raise ValueError(
+            "browser_route requires one of: body (mock), redirect_url, or"
+            " a header-rewrite argument"
+        )
+    if count > 1:
+        raise ValueError(
+            "browser_route modes are mutually exclusive: pick one of body"
+            " (mock), redirect_url, or a header-rewrite argument"
+        )
+    if has_mock:
+        return "mock"
+    if has_redirect:
+        return "redirect"
+    return "headers"
 
 
 @dataclass
@@ -258,6 +415,9 @@ class _HelperExtensionCapabilityMixin:
         _helper_captures: dict[str, _CaptureState]
         _helper_init_scripts: set[str]
         _helper_subscribers_installed: bool
+        _helper_routes: dict[str, _RouteEntry]
+        _helper_route_counter: "itertools.count[int]"
+        _helper_network_state: str
 
     def _helper_bridge_or_raise(self) -> "HelperBridge":
         bridge = getattr(self, "_helper_bridge", None)
@@ -282,6 +442,26 @@ class _HelperExtensionCapabilityMixin:
             scripts = set()
             self._helper_init_scripts = scripts
         return scripts
+
+    def _routes_map(self) -> dict[str, _RouteEntry]:
+        routes = getattr(self, "_helper_routes", None)
+        if routes is None:
+            routes = {}
+            self._helper_routes = routes
+        return routes
+
+    def _route_counter(self) -> "itertools.count[int]":
+        counter = getattr(self, "_helper_route_counter", None)
+        if counter is None:
+            counter = itertools.count()
+            self._helper_route_counter = counter
+        return counter
+
+    def _ordered_routes(self) -> list[_RouteEntry]:
+        return sorted(
+            self._routes_map().values(),
+            key=lambda r: (-r.priority, r.insertion_index),
+        )
 
     def _ensure_event_subscribers(self, bridge: "HelperBridge") -> None:
         if getattr(self, "_helper_subscribers_installed", False):
@@ -480,3 +660,179 @@ class _HelperExtensionCapabilityMixin:
         bridge.request("init_script.unregister", {"script_id": script_id})
         scripts.discard(script_id)
         return {"removed": True}
+
+    @capability("helper-extension")
+    def browser_route(
+        self,
+        pattern: str,
+        *,
+        status: int = 200,
+        body: str | None = None,
+        content_type: str = "text/plain",
+        headers: dict[str, str] | None = None,
+        redirect_url: str | None = None,
+        set_request_headers: dict[str, str] | None = None,
+        remove_request_headers: list[str] | None = None,
+        set_response_headers: dict[str, str] | None = None,
+        remove_response_headers: list[str] | None = None,
+        priority: int | None = None,
+    ) -> dict[str, Any]:
+        """Install a routing rule against ``pattern``.
+
+        Modes are mutually exclusive; exactly one must be selected:
+
+        * **Mock** -- ``body`` is set. The extension answers matching
+          requests by redirecting them to a synthesised ``data:`` URL
+          carrying ``body`` and ``content_type``. Firefox treats the
+          redirect target as a new request whose status is ``200`` and
+          whose only header is the URL's ``Content-Type``. The supplied
+          ``status`` and ``headers`` are stored on the route entry for
+          echo via :meth:`browser_route_list` but **do not** reach the
+          page. Workflows that need arbitrary status codes or response
+          headers should use ``proxy-intercept``.
+        * **Redirect** -- ``redirect_url`` is set. The blocking
+          ``onBeforeRequest`` listener returns ``{redirectUrl: ...}``.
+        * **Header rewrite** -- any of ``set_request_headers``,
+          ``remove_request_headers``, ``set_response_headers``,
+          ``remove_response_headers`` is set. Implemented via
+          ``onBeforeSendHeaders`` (request side) and
+          ``onHeadersReceived`` (response side); the request and
+          response bodies pass through untouched.
+
+        ``priority`` orders routes during evaluation: higher first,
+        insertion order as tiebreaker. ``None`` is treated as ``0``.
+        Returns ``{"route_id": str}`` -- the handle for
+        :meth:`browser_unroute`.
+        """
+
+        validate_match_pattern(pattern)
+        mode = _resolve_route_mode(
+            body,
+            redirect_url,
+            set_request_headers,
+            remove_request_headers,
+            set_response_headers,
+            remove_response_headers,
+        )
+        if priority is None:
+            resolved_priority = 0
+        elif isinstance(priority, bool) or not isinstance(priority, int):
+            raise ValueError("priority must be an int or None")
+        else:
+            resolved_priority = priority
+        if mode == "mock":
+            if not isinstance(status, int) or isinstance(status, bool):
+                raise ValueError("status must be an int")
+            if not isinstance(content_type, str) or not content_type:
+                raise ValueError("content_type must be a non-empty string")
+            if not isinstance(body, str):
+                raise ValueError("body must be a string in mock mode")
+        elif mode == "redirect":
+            if not isinstance(redirect_url, str) or not redirect_url:
+                raise ValueError("redirect_url must be a non-empty string")
+
+        bridge = self._helper_bridge_or_raise()
+        route_id = secrets.token_hex(8)
+        entry = _RouteEntry(
+            route_id=route_id,
+            pattern=pattern,
+            mode=mode,
+            priority=resolved_priority,
+            insertion_index=next(self._route_counter()),
+            status=status if mode == "mock" else None,
+            body=body if mode == "mock" else None,
+            content_type=content_type if mode == "mock" else None,
+            headers=(dict(headers) if headers and mode == "mock" else None),
+            redirect_url=redirect_url if mode == "redirect" else None,
+            set_request_headers=(
+                dict(set_request_headers) if set_request_headers else None
+            ),
+            remove_request_headers=(
+                list(remove_request_headers) if remove_request_headers else None
+            ),
+            set_response_headers=(
+                dict(set_response_headers) if set_response_headers else None
+            ),
+            remove_response_headers=(
+                list(remove_response_headers) if remove_response_headers else None
+            ),
+        )
+        routes = self._routes_map()
+        routes[route_id] = entry
+        try:
+            bridge.request("route.add", entry.to_extension_payload())
+        except Exception:
+            routes.pop(route_id, None)
+            raise
+        return {"route_id": route_id}
+
+    @capability("helper-extension")
+    def browser_unroute(
+        self,
+        route_id: str | None = None,
+        pattern: str | None = None,
+    ) -> dict[str, Any]:
+        """Remove one or more installed routes.
+
+        Exactly one of ``route_id`` or ``pattern`` must be supplied; the
+        former removes a single route, the latter removes every route
+        whose pattern matches ``pattern`` byte-for-byte. Returns
+        ``{"removed": int}`` with the count of routes actually dropped.
+        """
+
+        if (route_id is None) == (pattern is None):
+            raise ValueError(
+                "browser_unroute requires exactly one of route_id or pattern"
+            )
+        bridge = self._helper_bridge_or_raise()
+        routes = self._routes_map()
+        if route_id is not None:
+            entry = routes.pop(route_id, None)
+            if entry is None:
+                return {"removed": 0}
+            bridge.request("route.remove", {"route_ids": [route_id]})
+            return {"removed": 1}
+        victims = [rid for rid, r in routes.items() if r.pattern == pattern]
+        for rid in victims:
+            routes.pop(rid, None)
+        if victims:
+            bridge.request("route.remove", {"route_ids": victims})
+        return {"removed": len(victims)}
+
+    @capability("helper-extension")
+    def browser_route_list(self) -> list[dict[str, Any]]:
+        """Return installed routes in evaluation order.
+
+        Routes are sorted by ``priority`` (descending) with insertion
+        order as the tiebreaker -- the order the blocking listeners use
+        when picking the first matching rule.
+        """
+
+        return [entry.echo() for entry in self._ordered_routes()]
+
+    @capability("helper-extension")
+    def browser_network_state_set(
+        self,
+        state: Literal["online", "offline"],
+    ) -> dict[str, Any]:
+        """Toggle the simulated network state.
+
+        When ``state`` is ``"offline"`` the extension installs a
+        blocking ``webRequest.onBeforeRequest`` listener that returns
+        ``{cancel: true}`` for every URL, blocking new request
+        initiation. In-flight requests already past ``onBeforeRequest``
+        continue to completion -- this matches
+        ``playwright-mcp``'s offline-mode semantics. Transitioning back
+        to ``"online"`` removes the listener. ``navigator.onLine`` is
+        not toggled; pages that gate retries on that signal will not
+        observe the offline state.
+        """
+
+        if state not in ("online", "offline"):
+            raise ValueError(
+                f"state must be 'online' or 'offline'; got {state!r}"
+            )
+        bridge = self._helper_bridge_or_raise()
+        bridge.request("network_state.set", {"state": state})
+        self._helper_network_state = state
+        return {"state": state}
