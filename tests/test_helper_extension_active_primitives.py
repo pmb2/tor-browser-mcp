@@ -279,7 +279,9 @@ def test_route_list_echoes_mode_specific_fields() -> None:
     drv.browser_route("*://r/*", redirect_url="https://r2/")
     drv.browser_route("*://h/*", set_request_headers={"X": "1"})
 
-    routes = drv.browser_route_list()
+    result = drv.browser_route_list()
+    assert set(result.keys()) == {"routes"}
+    routes = result["routes"]
     assert len(routes) == 3
     by_pattern = {r["pattern"]: r for r in routes}
 
@@ -312,7 +314,8 @@ def test_route_list_orders_by_priority_then_insertion() -> None:
     r_default = drv.browser_route("*://c/*", body="c")["route_id"]
     r_high2 = drv.browser_route("*://d/*", body="d", priority=10)["route_id"]
 
-    ids = [r["route_id"] for r in drv.browser_route_list()]
+    listed = drv.browser_route_list()
+    ids = [r["route_id"] for r in listed["routes"]]
     # priority 10 first (high1 then high2 by insertion), then priority 1,
     # then default priority 0.
     assert ids == [r_high1, r_high2, r_low, r_default]
@@ -328,7 +331,7 @@ def test_unroute_by_route_id_returns_one() -> None:
 
     result = drv.browser_unroute(route_id=rid)
     assert result == {"removed": 1}
-    assert drv.browser_route_list() == []
+    assert drv.browser_route_list() == {"routes": []}
     method, params = bridge.calls[-1]
     assert method == "route.remove"
     assert params["route_ids"] == [rid]
@@ -352,7 +355,7 @@ def test_unroute_by_pattern_removes_all_matching() -> None:
 
     result = drv.browser_unroute(pattern="*://example.com/*")
     assert result == {"removed": 2}
-    remaining = drv.browser_route_list()
+    remaining = drv.browser_route_list()["routes"]
     assert len(remaining) == 1
     assert remaining[0]["pattern"] == "*://other.com/*"
     method, params = bridge.calls[-1]
@@ -388,7 +391,7 @@ def test_unroute_raises_when_bridge_missing() -> None:
 
 def test_route_list_empty_when_no_routes() -> None:
     drv = _Driver(bridge=_FakeBridge())
-    assert drv.browser_route_list() == []
+    assert drv.browser_route_list() == {"routes": []}
 
 
 # --- browser_network_state_set ----------------------------------------------

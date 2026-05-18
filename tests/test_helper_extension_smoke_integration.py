@@ -366,7 +366,7 @@ def test_helper_extension_routes_fetch_to_mocked_body(
     assert isinstance(route_id, str) and route_id
 
     listed = drv.browser_route_list()
-    assert any(r["route_id"] == route_id for r in listed)
+    assert any(r["route_id"] == route_id for r in listed["routes"])
 
     drv.webdriver.set_script_timeout(15)
     page_body = drv.webdriver.execute_async_script(

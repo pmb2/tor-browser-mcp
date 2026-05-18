@@ -1068,15 +1068,17 @@ class _HelperExtensionCapabilityMixin:
         return {"removed": len(victims)}
 
     @capability("helper-extension")
-    def browser_route_list(self) -> list[dict[str, Any]]:
+    def browser_route_list(self) -> dict[str, Any]:
         """Return installed routes in evaluation order.
 
         Routes are sorted by ``priority`` (descending) with insertion
         order as the tiebreaker -- the order the blocking listeners use
-        when picking the first matching rule.
+        when picking the first matching rule. Returns ``{"routes":
+        [...]}`` where each entry is the JSON-safe descriptor produced
+        by :meth:`_RouteEntry.echo`.
         """
 
-        return [entry.echo() for entry in self._ordered_routes()]
+        return {"routes": [entry.echo() for entry in self._ordered_routes()]}
 
     @capability("helper-extension")
     def browser_network_state_set(
