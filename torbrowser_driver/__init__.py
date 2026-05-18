@@ -19,6 +19,7 @@ from .exceptions import (
     HelperExtensionError,
     HelperUnavailable,
     PathNotAllowed,
+    ProxyInterceptError,
     TorBootstrapTimeout,
     TorBrowserDriverError,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "OPTIONAL_CAPABILITIES",
     "PathNotAllowed",
     "PathPolicy",
+    "ProxyInterceptError",
     "TorBootstrapTimeout",
     "TorBrowserDriver",
     "TorBrowserDriverError",

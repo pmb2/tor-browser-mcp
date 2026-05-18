@@ -37,3 +37,7 @@ class HelperBridgeDisconnected(HelperExtensionError):
 
 class HelperUnavailable(HelperExtensionError):
     """A tool requires a helper-extension feature this Firefox build does not support."""
+
+
+class ProxyInterceptError(TorBrowserDriverError):
+    """Raised when the proxy-intercept substrate fails to start or operate."""

@@ -65,6 +65,9 @@ class DriverConfig:
             consulted when ``"helper-extension"`` is in ``enabled_caps``.
         helper_bridge_host: Address the helper-extension bridge listens on.
             Hardcoded to ``"127.0.0.1"``; exposed for completeness.
+        intercept_port: Localhost TCP port the ``proxy-intercept`` MITM
+            proxy listens on. Only consulted when ``"proxy-intercept"`` is
+            in ``enabled_caps``.
         extra_prefs: Additional Firefox prefs merged on top of the
             load-bearing defaults. Caller-supplied prefs win on key collision.
         include_legacy_tor_prefs: When ``True``, the driver also sets the
@@ -90,6 +93,7 @@ class DriverConfig:
     tor_data_dir: Path | None = None
     helper_bridge_port: int | None = None
     helper_bridge_host: str = "127.0.0.1"
+    intercept_port: int = 9261
     extra_prefs: Mapping[str, Any] = field(default_factory=dict)
     include_legacy_tor_prefs: bool = False
     enabled_caps: frozenset[str] = field(
@@ -147,6 +151,23 @@ class DriverConfig:
                 raise DriverConfigError(
                     "helper_bridge_port must differ from socks_port and control_port"
                 )
+
+        ip = self.intercept_port
+        if not (1 <= ip <= 65535):
+            raise DriverConfigError(
+                f"intercept_port {ip} is outside the valid port range"
+            )
+        if ip == self.socks_port or ip == self.control_port:
+            raise DriverConfigError(
+                "intercept_port must differ from socks_port and control_port"
+            )
+        if (
+            self.helper_bridge_port is not None
+            and ip == self.helper_bridge_port
+        ):
+            raise DriverConfigError(
+                "intercept_port must differ from helper_bridge_port"
+            )
 
         if self.geckodriver_path is not None:
             gp = Path(self.geckodriver_path).expanduser().resolve(strict=False)

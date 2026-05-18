@@ -22,6 +22,10 @@ torbrowser-mcp = "torbrowser_mcp.cli:main"
 dev = [
     "pytest>=7",
 ]
+proxy-intercept = [
+    "mitmproxy>=11,<13",
+    "python-socks>=2,<3",
+]
 
 [tool.setuptools.packages.find]
 include = ["torbrowser_driver*", "torbrowser_mcp*"]
