@@ -31,6 +31,15 @@ proxy-intercept = [
 include = ["torbrowser_driver*", "torbrowser_mcp*"]
 exclude = ["tests*", "references*"]
 
+[tool.setuptools.package-data]
+"torbrowser_driver" = [
+    "py.typed",
+    "_helper_extension/manifest.json",
+    "_helper_extension/background.js",
+    "_helper_extension/background.html",
+]
+"torbrowser_mcp" = ["py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
