@@ -107,6 +107,28 @@ def _load_bearing_prefs(config: DriverConfig) -> dict[str, Any]:
                 "extensions.torbutton.use_nontor_proxy": True,
             }
         )
+    if "helper-extension" in config.enabled_caps:
+        # TBB ships network.proxy.allow_hijacking_localhost=true (bug 31065)
+        # so loopback destinations are also routed through the SOCKS proxy.
+        # The helper extension's background page dials 127.0.0.1:<bridge_port>
+        # over a plain WebSocket; with hijacking on, that connection would be
+        # handed to tor's SOCKS, which refuses private-IP destinations and
+        # the dial-back never reaches the driver. Disabling hijacking and
+        # naming 127.0.0.1/localhost in no_proxies_on keeps the bridge
+        # reachable while leaving every other request on the SOCKS path.
+        prefs["network.proxy.allow_hijacking_localhost"] = False
+        prefs["network.proxy.no_proxies_on"] = "127.0.0.1,localhost"
+        # Profile-scope sideload: the session XPI is dropped under
+        # <profile>/extensions/<id>.xpi and Firefox discovers it at
+        # profile init. autoDisableScopes=0 keeps newly-discovered
+        # extensions enabled instead of waiting for a UI confirmation;
+        # enabledScopes=15 leaves every install scope (profile, user,
+        # app, system) eligible to load; signatures.required=false is
+        # defensive against future ESR builds tightening unsigned
+        # sideload (current TB ESR honours this pref).
+        prefs["extensions.autoDisableScopes"] = 0
+        prefs["extensions.enabledScopes"] = 15
+        prefs["xpinstall.signatures.required"] = False
     return prefs
 
 

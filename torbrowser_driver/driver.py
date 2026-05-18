@@ -13,9 +13,18 @@ from types import TracebackType
 from selenium import webdriver
 from stem.control import Controller
 
+import secrets
+import socket
+
 from ._core_primitives import _CoreCapabilityMixin
 from ._diagnostics_primitives import _DiagnosticsCapabilityMixin
 from ._extract_primitives import _ExtractCapabilityMixin
+from ._helper_extension_bridge import HelperBridge
+from ._helper_extension_install import (
+    install_helper,
+    prepare_helper_install,
+    uninstall_helper,
+)
 from ._highlight_primitives import _HighlightCapabilityMixin
 from ._http_over_tor_primitives import _HttpOverTorCapabilityMixin
 from ._network_observe_primitives import _NetworkObserveCapabilityMixin
@@ -27,6 +36,7 @@ from ._unsafe_primitives import _UnsafeCapabilityMixin
 from ._vision_primitives import _VisionCapabilityMixin
 from .browser_process import launch_browser
 from .config import DriverConfig
+from .exceptions import BrowserLaunchError
 from .tor_process import launch_tor, shutdown_tor
 
 log = logging.getLogger(__name__)
@@ -71,6 +81,8 @@ class TorBrowserDriver(
         self._owns_session_dir = False
         self._owns_tor_data_dir = False
         self._closed = False
+        self._helper_bridge: HelperBridge | None = None
+        self._helper_addon_id: str | None = None
 
     def __enter__(self) -> "TorBrowserDriver":
         self._session_dir = Path(tempfile.mkdtemp(prefix="torbrowser-driver-"))
@@ -88,13 +100,44 @@ class TorBrowserDriver(
 
         try:
             self._tor_process, self.controller = launch_tor(config)
+            if "helper-extension" in config.enabled_caps:
+                self._helper_bridge = self._build_helper_bridge(config)
+                prepare_helper_install(self, config, self._helper_bridge)
+                try:
+                    self._helper_bridge.start()
+                except OSError as exc:
+                    raise BrowserLaunchError(
+                        f"helper-extension bridge failed to bind "
+                        f"{self._helper_bridge.host}:{self._helper_bridge.port}: {exc}"
+                    ) from exc
             self.webdriver, _ = launch_browser(
                 config, session_dir=self._session_dir
             )
-        except Exception:
+            if self._helper_bridge is not None:
+                install_helper(self, config, self._helper_bridge)
+        except Exception:  # pragma: no cover - teardown branch
             self.close()
             raise
         return self
+
+    @staticmethod
+    def _allocate_localhost_port(host: str) -> int:
+        """Bind a transient socket to ``host:0`` and return the kernel-chosen port."""
+
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.bind((host, 0))
+            return probe.getsockname()[1]
+        finally:
+            probe.close()
+
+    def _build_helper_bridge(self, config: DriverConfig) -> HelperBridge:
+        host = config.helper_bridge_host
+        port = config.helper_bridge_port
+        if port is None:
+            port = self._allocate_localhost_port(host)
+        token = secrets.token_hex(16)
+        return HelperBridge(host=host, port=port, token=token)
 
     def __exit__(
         self,
@@ -114,6 +157,11 @@ class TorBrowserDriver(
         if self._closed:
             return
         self._closed = True
+
+        if self._helper_bridge is not None:
+            with suppress(Exception):
+                uninstall_helper(self, self.config, self._helper_bridge)
+            self._helper_bridge = None
 
         if self.webdriver is not None:
             with suppress(Exception):

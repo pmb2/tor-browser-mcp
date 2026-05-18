@@ -60,6 +60,11 @@ class DriverConfig:
         control_port: Tor control port for the bundled tor we spawn.
         tor_data_dir: ``DataDirectory`` for the bundled tor. ``None`` means
             create a session-scoped temporary directory.
+        helper_bridge_port: Localhost TCP port the helper-extension bridge
+            binds to. ``None`` means pick a free port at start time. Only
+            consulted when ``"helper-extension"`` is in ``enabled_caps``.
+        helper_bridge_host: Address the helper-extension bridge listens on.
+            Hardcoded to ``"127.0.0.1"``; exposed for completeness.
         extra_prefs: Additional Firefox prefs merged on top of the
             load-bearing defaults. Caller-supplied prefs win on key collision.
         include_legacy_tor_prefs: When ``True``, the driver also sets the
@@ -83,6 +88,8 @@ class DriverConfig:
     socks_port: int = 9250
     control_port: int = 9251
     tor_data_dir: Path | None = None
+    helper_bridge_port: int | None = None
+    helper_bridge_host: str = "127.0.0.1"
     extra_prefs: Mapping[str, Any] = field(default_factory=dict)
     include_legacy_tor_prefs: bool = False
     enabled_caps: frozenset[str] = field(
@@ -130,6 +137,17 @@ class DriverConfig:
                     f"{port_name} {value} is outside the valid port range"
                 )
 
+        if self.helper_bridge_port is not None:
+            hbp = self.helper_bridge_port
+            if not (1 <= hbp <= 65535):
+                raise DriverConfigError(
+                    f"helper_bridge_port {hbp} is outside the valid port range"
+                )
+            if hbp == self.socks_port or hbp == self.control_port:
+                raise DriverConfigError(
+                    "helper_bridge_port must differ from socks_port and control_port"
+                )
+
         if self.geckodriver_path is not None:
             gp = Path(self.geckodriver_path).expanduser().resolve(strict=False)
             if not gp.is_file():
@@ -172,9 +190,11 @@ class DriverConfig:
 
         Marionette in Firefox 128+ refuses to switch the WebDriver context
         to ``chrome`` unless the browser was started with this flag. The
-        chrome scope is only reachable through tools tagged with the
-        ``unsafe`` capability, so the flag is enabled exactly when that
-        capability is.
+        chrome scope is reached by ``unsafe`` (which surfaces it to the
+        agent) and by ``helper-extension`` (which uses it internally to
+        drive ``AddonManager.installTemporaryAddon`` because Marionette's
+        own ``INSTALL_ADDON`` command no-ops silently on Tor Browser 15 /
+        geckodriver 0.36).
         """
 
-        return "unsafe" in self.enabled_caps
+        return bool({"unsafe", "helper-extension"} & set(self.enabled_caps))

@@ -268,6 +268,16 @@ def test_registered_methods_http_over_tor_matches_expected_set() -> None:
     assert set(methods.keys()) == EXPECTED_HTTP_OVER_TOR_METHODS
 
 
+def test_helper_extension_is_known_optional_capability() -> None:
+    assert "helper-extension" in OPTIONAL_CAPABILITIES
+    assert "helper-extension" in KNOWN_CAPABILITIES
+    assert "helper-extension" not in DEFAULT_CAPABILITIES
+
+
+def test_registered_methods_helper_extension_currently_empty() -> None:
+    assert registered_methods(TorBrowserDriver, {"helper-extension"}) == {}
+
+
 def test_registered_methods_empty_caps_returns_empty() -> None:
     assert registered_methods(TorBrowserDriver, frozenset()) == {}
 

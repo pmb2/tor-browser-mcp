@@ -1,0 +1,25 @@
+{
+  "manifest_version": 2,
+  "name": "tor-browser-mcp helper",
+  "version": "0.1.0",
+  "description": "Driver-side network capture and routing helper. Installed temporarily by tor-browser-mcp when the helper-extension capability is enabled.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "helper@tor-browser-mcp.local",
+      "strict_min_version": "128.0"
+    }
+  },
+  "background": {
+    "page": "background.html",
+    "persistent": true
+  },
+  "permissions": [
+    "webRequest",
+    "webRequestBlocking",
+    "tabs",
+    "storage",
+    "alarms",
+    "<all_urls>"
+  ],
+  "content_security_policy": "script-src 'self'; object-src 'self'"
+}

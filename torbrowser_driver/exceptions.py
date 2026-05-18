@@ -21,3 +21,19 @@ class TorBootstrapTimeout(TorBrowserDriverError):
 
 class BrowserLaunchError(TorBrowserDriverError):
     """Geckodriver or Tor Browser failed to start."""
+
+
+class HelperExtensionError(TorBrowserDriverError):
+    """Base class for helper-extension capability failures."""
+
+
+class HelperBridgeTimeout(HelperExtensionError):
+    """A request to the helper extension did not get a response in time."""
+
+
+class HelperBridgeDisconnected(HelperExtensionError):
+    """The helper-extension bridge connection is no longer alive."""
+
+
+class HelperUnavailable(HelperExtensionError):
+    """A tool requires a helper-extension feature this Firefox build does not support."""

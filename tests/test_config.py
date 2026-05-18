@@ -95,6 +95,59 @@ def test_extra_prefs_default_is_empty(fake_tbb: Path, policy: PathPolicy) -> Non
     assert dict(config.extra_prefs) == {}
 
 
+def test_helper_bridge_port_defaults_to_none(
+    fake_tbb: Path, policy: PathPolicy
+) -> None:
+    config = DriverConfig(tbb_root=fake_tbb, path_policy=policy)
+    assert config.helper_bridge_port is None
+    assert config.helper_bridge_host == "127.0.0.1"
+
+
+def test_helper_bridge_port_rejects_out_of_range(
+    fake_tbb: Path, policy: PathPolicy
+) -> None:
+    with pytest.raises(DriverConfigError):
+        DriverConfig(
+            tbb_root=fake_tbb, path_policy=policy, helper_bridge_port=0
+        )
+    with pytest.raises(DriverConfigError):
+        DriverConfig(
+            tbb_root=fake_tbb, path_policy=policy, helper_bridge_port=70000
+        )
+
+
+def test_helper_bridge_port_must_differ_from_tor_ports(
+    fake_tbb: Path, policy: PathPolicy
+) -> None:
+    with pytest.raises(DriverConfigError):
+        DriverConfig(
+            tbb_root=fake_tbb,
+            path_policy=policy,
+            socks_port=9250,
+            control_port=9251,
+            helper_bridge_port=9250,
+        )
+    with pytest.raises(DriverConfigError):
+        DriverConfig(
+            tbb_root=fake_tbb,
+            path_policy=policy,
+            socks_port=9250,
+            control_port=9251,
+            helper_bridge_port=9251,
+        )
+
+
+def test_helper_bridge_port_accepts_unique_value(
+    fake_tbb: Path, policy: PathPolicy
+) -> None:
+    config = DriverConfig(
+        tbb_root=fake_tbb,
+        path_policy=policy,
+        helper_bridge_port=9258,
+    )
+    assert config.helper_bridge_port == 9258
+
+
 def test_allow_chrome_system_access_tracks_unsafe_cap(
     fake_tbb: Path, policy: PathPolicy
 ) -> None:
