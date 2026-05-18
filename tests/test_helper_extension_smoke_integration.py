@@ -151,25 +151,17 @@ def _data_url(html: str) -> str:
 def test_helper_extension_captures_check_torproject_response_body(
     drv: TorBrowserDriver,
 ) -> None:
-    """A capture against check.torproject.org surfaces the request envelope.
+    """A capture against check.torproject.org surfaces the request body.
 
     Exercises the capture lifecycle end-to-end: capture start, navigation
-    plus a page-context ``fetch('/')`` that touches the same origin, and
-    capture stop returning per-request envelopes with headers, status,
-    and matching URL.
-
-    The page-side fetch result is asserted to contain the tor-exit
-    marker so the navigation went through; the same request is then
-    located in the capture envelopes and checked for status/headers.
-
-    Response-body bytes are not asserted here because
-    ``webRequest.filterResponseData`` on Tor Browser 15 / Firefox 140
-    ESR attaches successfully and fires ``onstop`` but does not deliver
-    payload bytes to ``ondata`` for requests that cross the
-    extension/network process boundary. The filter and the rest of the
-    pipeline are wired up in production; if a future TB build restores
-    the data path the assertion below will start seeing populated
-    bodies.
+    plus a page-context ``fetch('/')`` that touches the same origin,
+    and capture stop returning per-request envelopes with headers,
+    status, and response body. The fetch call is the bytes-bearing path
+    here -- on TB 15.x ``webRequest.filterResponseData`` does not
+    deliver bytes, so body capture rides the page-world override the
+    helper extension injects at ``document_start``. The matched entry
+    must have ``source`` of ``"merged"`` (webRequest + page-world body)
+    or ``"page"`` (page-world only).
     """
 
     drv.browser_navigate("https://check.torproject.org/")
@@ -205,17 +197,109 @@ def test_helper_extension_captures_check_torproject_response_body(
         e
         for e in entries
         if e["url"] == "https://check.torproject.org/"
-        and e["status_code"] == 200
+        and e["method"] == "GET"
     ]
     assert matching, (
-        f"no captured entry for https://check.torproject.org/ with status 200; "
+        f"no captured entry for https://check.torproject.org/ GET; "
         f"saw urls={[e['url'] for e in entries]!r}"
     )
-    entry = matching[-1]
-    assert entry["response_headers"], "response headers should be non-empty"
-    assert entry["response_headers"].get("Content-Type", "").startswith("text/html")
-    assert entry["method"] == "GET"
-    assert isinstance(entry["response_body"], (str, dict, type(None)))
+    bodied = [e for e in matching if isinstance(e["response_body"], str) and e["response_body"]]
+    assert bodied, (
+        "no captured entry carried a non-empty response_body; "
+        f"sources={[e.get('source') for e in matching]!r}, "
+        f"bodies={[type(e.get('response_body')).__name__ for e in matching]!r}"
+    )
+    entry = bodied[-1]
+    assert ("Congratulations" in entry["response_body"]) or (
+        "Sorry" in entry["response_body"]
+    ), f"response_body missing tor-exit marker: head={entry['response_body'][:200]!r}"
+    assert entry["source"] in ("merged", "page"), (
+        f"expected source merged or page, got {entry['source']!r}"
+    )
+    if entry["source"] == "merged":
+        assert entry["response_headers"], "merged entry should keep webRequest headers"
+        assert entry["response_headers"].get("Content-Type", "").startswith("text/html")
+        assert entry["status_code"] == 200
+
+
+def test_helper_extension_captures_xhr_response_body(
+    drv: TorBrowserDriver,
+) -> None:
+    """A page-initiated XMLHttpRequest surfaces its response body.
+
+    Navigates to ``check.torproject.org`` so an XHR to ``/`` is
+    same-origin, then drives the XHR from page context via Selenium's
+    ``execute_async_script`` and waits for ``loadend``. After
+    ``browser_network_capture_stop`` the matching entry must carry the
+    tor-exit marker in its ``response_body``. The body comes from the
+    page-world XHR override the helper injects at ``document_start``;
+    the entry surfaces as ``source="merged"`` when webRequest also saw
+    the request, or ``source="page"`` otherwise.
+    """
+
+    drv.browser_navigate("https://check.torproject.org/")
+
+    capture_id = drv.browser_network_capture_start(
+        patterns=["https://check.torproject.org/*"],
+        capture_response_body=True,
+        max_body_bytes=5 * 1024 * 1024,
+    )["capture_id"]
+
+    page_status = None
+    try:
+        drv.webdriver.set_script_timeout(30)
+        page_status = drv.webdriver.execute_async_script(
+            """
+            const cb = arguments[arguments.length - 1];
+            try {
+              var x = new XMLHttpRequest();
+              x.open('GET', '/?xhr-probe=' + Date.now());
+              x.onloadend = function () {
+                cb({status: x.status, body: x.responseText || '', url: x.responseURL});
+              };
+              x.onerror = function () {
+                cb({status: -1, body: '', error: 'xhr-onerror'});
+              };
+              x.send();
+            } catch (e) {
+              cb({status: -1, body: '', error: String(e)});
+            }
+            """
+        )
+    finally:
+        time.sleep(2.0)
+        result = drv.browser_network_capture_stop(capture_id)
+
+    assert isinstance(page_status, dict), f"xhr never completed: {page_status!r}"
+    assert page_status.get("status") == 200, page_status
+    page_body_text = page_status.get("body") or ""
+    assert ("Congratulations" in page_body_text) or ("Sorry" in page_body_text)
+
+    entries = result["entries"]
+    assert entries, "expected at least one captured entry from XHR"
+    matching = [
+        e
+        for e in entries
+        if isinstance(e["url"], str)
+        and e["url"].startswith("https://check.torproject.org/")
+        and "xhr-probe=" in e["url"]
+        and e["method"] == "GET"
+    ]
+    assert matching, (
+        f"no captured entry for the XHR target; urls={[e['url'] for e in entries]!r}"
+    )
+    bodied = [
+        e for e in matching if isinstance(e["response_body"], str) and e["response_body"]
+    ]
+    assert bodied, (
+        "no captured XHR entry carried a non-empty response_body; "
+        f"sources={[e.get('source') for e in matching]!r}"
+    )
+    entry = bodied[-1]
+    assert ("Congratulations" in entry["response_body"]) or (
+        "Sorry" in entry["response_body"]
+    )
+    assert entry["source"] in ("merged", "page")
 
 
 def test_helper_extension_init_script_runs_at_document_start(

@@ -118,7 +118,7 @@ def _now_ms() -> float:
     return time.time() * 1000.0
 
 
-def _new_entry(request_id: str) -> dict[str, Any]:
+def _new_entry(request_id: str | None) -> dict[str, Any]:
     return {
         "request_id": request_id,
         "method": None,
@@ -133,6 +133,8 @@ def _new_entry(request_id: str) -> dict[str, Any]:
         "completed_at": None,
         "error": None,
         "ip": None,
+        "source": "webrequest",
+        "page_id": None,
     }
 
 
@@ -281,6 +283,7 @@ class _CaptureState:
     body_buffers: dict[str, bytearray] = field(default_factory=dict)
     body_lengths: dict[str, int] = field(default_factory=dict)
     body_finalized: set[str] = field(default_factory=set)
+    page_pending: list[dict[str, Any]] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -380,15 +383,175 @@ def apply_response_error(state: _CaptureState, data: dict[str, Any]) -> None:
             entry["completed_at"] = data.get("completed_at") or _now_ms()
 
 
-def finalize_capture(state: _CaptureState) -> list[dict[str, Any]]:
-    """Flush pending body buffers and return the entries list.
+def apply_body_observed(state: _CaptureState, data: dict[str, Any]) -> None:
+    """Buffer a page-world body envelope for later merge into the capture.
 
-    Called by :meth:`browser_network_capture_stop` to materialise any
-    request whose ``is_final`` body chunk never arrived (the response
-    stream closed but the extension's ``onstop`` handler raced with
-    capture removal).
+    The webRequest event stream and the page-world override use distinct
+    id namespaces, so the merge cannot happen on arrival; it is deferred
+    to :func:`finalize_capture`, which pairs entries by ``(method, url)``
+    and falls back to synthetic envelopes for page-only requests.
     """
 
+    url = data.get("url")
+    if not isinstance(url, str) or not url:
+        return
+    method = data.get("method")
+    method_norm = method.upper() if isinstance(method, str) and method else "GET"
+    headers = data.get("response_headers")
+    headers_dict = dict(headers) if isinstance(headers, dict) else {}
+    body = data.get("response_body")
+    body_str = body if isinstance(body, str) else ""
+    page_body = {
+        "page_id": str(data.get("page_id") or ""),
+        "url": url,
+        "method": method_norm,
+        "status_code": data.get("status_code"),
+        "response_headers": headers_dict,
+        "response_body": body_str,
+        "response_body_truncated": bool(data.get("response_body_truncated")),
+        "observed_at": data.get("observed_at"),
+    }
+    with state.lock:
+        state.page_pending.append(page_body)
+
+
+def _truncate_to_bytes(text: str, max_bytes: int) -> tuple[str, bool]:
+    """Clip ``text`` so its UTF-8 encoding fits inside ``max_bytes``.
+
+    Returns ``(clipped_text, truncated)``. Truncation snaps to a UTF-8
+    character boundary so the resulting string is always valid UTF-8.
+    """
+
+    if max_bytes < 0:
+        max_bytes = 0
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text, False
+    clipped = encoded[:max_bytes]
+    return clipped.decode("utf-8", errors="ignore"), True
+
+
+def _match_page_body_to_envelope(
+    envelope: dict[str, Any],
+    pending: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Find the oldest pending page-world body whose ``(method, url)``
+    matches ``envelope``; return it without removing from ``pending``.
+
+    Returns ``None`` when no candidate fits. ``method`` comparison is
+    case-insensitive; ``url`` comparison is exact-string. The caller is
+    responsible for popping the matched entry once it commits to using
+    it -- this keeps the matcher pure and the FIFO-by-method-and-url
+    semantics testable without mutating shared state.
+    """
+
+    target_url = envelope.get("url")
+    target_method = envelope.get("method")
+    if not isinstance(target_url, str) or not target_url:
+        return None
+    target_method_norm = (
+        target_method.upper() if isinstance(target_method, str) and target_method else None
+    )
+    for candidate in pending:
+        if candidate.get("url") != target_url:
+            continue
+        cand_method = candidate.get("method")
+        cand_method_norm = (
+            cand_method.upper() if isinstance(cand_method, str) and cand_method else None
+        )
+        if target_method_norm is not None and cand_method_norm is not None:
+            if target_method_norm != cand_method_norm:
+                continue
+        return candidate
+    return None
+
+
+def _apply_page_body(
+    envelope: dict[str, Any],
+    page_body: dict[str, Any],
+    max_body_bytes: int,
+) -> None:
+    """Fold a page-world body into a webRequest-side envelope in place.
+
+    Sets ``response_body`` (UTF-8-truncated to ``max_body_bytes``),
+    ``response_body_truncated`` (true when either the page side already
+    flagged it or this call clipped further), ``page_id``, and flips
+    ``source`` to ``"merged"``. Existing webRequest-side fields (URL,
+    method, headers, status, IP, timestamps) are preserved.
+    """
+
+    body = page_body.get("response_body")
+    if not isinstance(body, str):
+        body = ""
+    clipped, clipped_truncated = _truncate_to_bytes(body, max_body_bytes)
+    envelope["response_body"] = clipped
+    envelope["response_body_truncated"] = (
+        bool(page_body.get("response_body_truncated")) or clipped_truncated
+    )
+    page_id = page_body.get("page_id")
+    if isinstance(page_id, str) and page_id:
+        envelope["page_id"] = page_id
+    envelope["source"] = "merged"
+
+
+def _envelope_from_page_body(
+    page_body: dict[str, Any], max_body_bytes: int
+) -> dict[str, Any]:
+    """Build a synthetic envelope for a page-world request that webRequest
+    never produced an entry for.
+
+    Marks ``source="page"`` and leaves ``request_id`` ``None`` so callers
+    can distinguish merged envelopes from page-only entries.
+    """
+
+    entry = _new_entry(None)
+    entry["url"] = page_body.get("url")
+    method = page_body.get("method")
+    entry["method"] = method.upper() if isinstance(method, str) and method else "GET"
+    status = page_body.get("status_code")
+    entry["status_code"] = status if isinstance(status, int) else None
+    headers = page_body.get("response_headers")
+    if isinstance(headers, dict):
+        entry["response_headers"] = dict(headers)
+    body = page_body.get("response_body")
+    if not isinstance(body, str):
+        body = ""
+    clipped, clipped_truncated = _truncate_to_bytes(body, max_body_bytes)
+    entry["response_body"] = clipped
+    entry["response_body_truncated"] = (
+        bool(page_body.get("response_body_truncated")) or clipped_truncated
+    )
+    page_id = page_body.get("page_id")
+    if isinstance(page_id, str) and page_id:
+        entry["page_id"] = page_id
+    observed_at = page_body.get("observed_at")
+    if isinstance(observed_at, (int, float)):
+        entry["completed_at"] = float(observed_at)
+    entry["source"] = "page"
+    return entry
+
+
+def finalize_capture(state: _CaptureState) -> list[dict[str, Any]]:
+    """Flush pending body buffers, merge page-world bodies, and return
+    the assembled entries.
+
+    Called by :meth:`browser_network_capture_stop`. Behaves in three
+    stages:
+
+    1. Flush any webRequest body chunks that never received a final
+       marker -- the on-the-wire stream closed but the extension's
+       ``onstop`` handler raced with capture removal.
+    2. For each webRequest envelope whose ``response_body`` is empty,
+       pop the oldest matching ``(method, url)`` page-world body and
+       merge it in. Envelopes that already carry a body (an unlikely
+       happy path on TB 15.x but the future-proof shape) keep their
+       webRequest body and stay ``source="webrequest"``.
+    3. Any remaining page-world bodies surface as synthetic
+       ``source="page"`` envelopes so service-worker- and other
+       webRequest-invisible requests do not vanish.
+    """
+
+    max_bytes = state.max_body_bytes
     with state.lock:
         for rid, buf in state.body_buffers.items():
             entry = state.entries.get(rid)
@@ -397,7 +560,28 @@ def finalize_capture(state: _CaptureState) -> list[dict[str, Any]]:
             if buf:
                 entry["response_body"] = decode_body(bytes(buf))
                 state.body_finalized.add(rid)
-        return list(state.entries.values())
+
+        ordered_envelopes = list(state.entries.values())
+        for envelope in ordered_envelopes:
+            if envelope.get("source") is None:
+                envelope["source"] = "webrequest"
+            existing_body = envelope.get("response_body")
+            already_has_body = (
+                isinstance(existing_body, str) and existing_body != ""
+            ) or isinstance(existing_body, dict)
+            if already_has_body:
+                continue
+            match = _match_page_body_to_envelope(envelope, state.page_pending)
+            if match is None:
+                continue
+            state.page_pending.remove(match)
+            _apply_page_body(envelope, match, max_bytes)
+
+        synthesised = [
+            _envelope_from_page_body(pb, max_bytes) for pb in state.page_pending
+        ]
+        state.page_pending.clear()
+        return ordered_envelopes + synthesised
 
 
 class _HelperExtensionCapabilityMixin:
@@ -472,6 +656,7 @@ class _HelperExtensionCapabilityMixin:
         bridge.subscribe("body_chunk", self._on_body_chunk)
         bridge.subscribe("response.completed", self._on_response_completed)
         bridge.subscribe("response.error", self._on_response_error)
+        bridge.subscribe("body.observed", self._on_body_observed)
         self._helper_subscribers_installed = True
 
     def _route_event(self, data: dict[str, Any], apply_fn) -> None:
@@ -500,6 +685,9 @@ class _HelperExtensionCapabilityMixin:
 
     def _on_response_error(self, data: dict[str, Any]) -> None:
         self._route_event(data, apply_response_error)
+
+    def _on_body_observed(self, data: dict[str, Any]) -> None:
+        self._route_event(data, apply_body_observed)
 
     @capability("helper-extension")
     def browser_extension_status(self) -> dict[str, Any]:
@@ -556,15 +744,35 @@ class _HelperExtensionCapabilityMixin:
         string, started/completed timestamps) until
         :meth:`browser_network_capture_stop` is called.
 
-        ``capture_response_body`` requests body streaming via
-        ``webRequest.filterResponseData``. On Tor Browser 15.x / Firefox
-        140 ESR the filter's ``ondata`` callback does not deliver bytes
-        for matching responses, so the ``response_body`` field in each
-        envelope is typically empty or ``None``; the rest of the
-        envelope is populated as documented. Workflows that need actual
-        response bytes should use the ``proxy-intercept`` capability,
-        which sees wire traffic before the browser decrypts it.
-        ``max_body_bytes`` caps any bytes that do arrive.
+        ``capture_response_body`` requests response-body capture. Two
+        sources feed it. ``webRequest.filterResponseData`` provides the
+        envelope shell (URL, method, status, headers, peer IP, timing)
+        for every matching request, plus body bytes on platforms where
+        ``ondata`` delivers them; on Tor Browser 15.x / Firefox 140 ESR
+        that callback fires but does not deliver payload bytes. A
+        page-world ``fetch`` and ``XMLHttpRequest`` override, installed
+        via a document-start content script, fills the gap for
+        JS-initiated requests -- the realistic majority of body-bearing
+        traffic. Bodies coming from the page world land in the same
+        envelope as the matching webRequest entry (by ``(method, url)``
+        with FIFO disambiguation between parallel requests to the same
+        URL); fully page-only requests surface as their own entries
+        with ``request_id = None`` and ``source = "page"``.
+        ``max_body_bytes`` clips both sources -- byte-precise on
+        UTF-8 boundaries for the page-world side.
+
+        Each envelope carries a ``source`` field describing where its
+        body came from: ``"webrequest"`` (envelope only, no body, or
+        body from ``filterResponseData``), ``"merged"`` (webRequest
+        envelope plus a matched page-world body), or ``"page"``
+        (page-world only; no webRequest counterpart, common for
+        service-worker-fronted requests). Subresource loads triggered
+        by the document parser -- ``<img>`` ``src``, ``<link>``
+        ``href``, ``<script>`` ``src`` -- never reach the page-world
+        override and stay ``source = "webrequest"`` with empty
+        ``response_body``; ``proxy-intercept`` is the substrate for
+        wire-level body capture regardless of how the request was
+        initiated.
 
         Captures whose URL sets overlap an already-running capture are
         rejected with :class:`ValueError` to keep the per-request
@@ -619,11 +827,15 @@ class _HelperExtensionCapabilityMixin:
 
         Returns ``{"capture_id": str, "entries": list[dict]}``. Each
         entry carries URL, method, status code, request and response
-        headers, peer IP, error string, and started/completed
-        timestamps. ``response_body`` is populated only when the
-        platform actually delivers bytes through
-        ``filterResponseData.ondata`` (see
-        :meth:`browser_network_capture_start` for the TB 15.x caveat).
+        headers, peer IP, error string, started/completed timestamps,
+        ``response_body``, ``response_body_truncated``, ``source``
+        (``"webrequest"`` / ``"merged"`` / ``"page"``), and ``page_id``
+        when the body came from the page-world override. Page-world
+        bodies are merged into the matching webRequest envelope by
+        ``(method, url)``; unmatched page-world bodies surface as
+        synthetic ``source="page"`` entries with ``request_id=None``.
+        See :meth:`browser_network_capture_start` for which traffic
+        each source covers.
 
         Raises :class:`ValueError` if ``capture_id`` is unknown. The
         extension-side listeners are removed before the entries are

@@ -16,7 +16,12 @@ import pytest
 from torbrowser_driver._helper_extension_primitives import (
     _CaptureState,
     _HelperExtensionCapabilityMixin,
+    _apply_page_body,
+    _envelope_from_page_body,
+    _match_page_body_to_envelope,
+    _truncate_to_bytes,
     apply_body_chunk,
+    apply_body_observed,
     apply_request_headers,
     apply_request_observed,
     apply_response_completed,
@@ -274,10 +279,307 @@ def test_capture_stop_round_trip_returns_entries() -> None:
     assert entry["status_code"] == 200
     assert entry["response_body"] == "hi"
     assert entry["response_body_truncated"] is False
+    assert entry["source"] == "webrequest"
 
     methods = [m for m, _ in bridge.calls]
     assert methods == ["capture.start", "capture.stop"]
     assert capture_id not in drv._captures_map()
+
+
+# --- page-world body merge -------------------------------------------------
+
+
+def _page_body(
+    *,
+    url: str,
+    method: str = "GET",
+    body: str = "",
+    status: int = 200,
+    headers: dict[str, str] | None = None,
+    page_id: str = "",
+    truncated: bool = False,
+    observed_at: float | None = None,
+) -> dict[str, Any]:
+    return {
+        "page_id": page_id,
+        "url": url,
+        "method": method.upper(),
+        "status_code": status,
+        "response_headers": dict(headers or {}),
+        "response_body": body,
+        "response_body_truncated": truncated,
+        "observed_at": observed_at,
+    }
+
+
+def test_match_page_body_to_envelope_exact_match() -> None:
+    envelope = {"method": "GET", "url": "https://example.com/api"}
+    pending = [_page_body(url="https://example.com/api", method="GET", body="a")]
+    match = _match_page_body_to_envelope(envelope, pending)
+    assert match is not None
+    assert match["response_body"] == "a"
+
+
+def test_match_page_body_to_envelope_url_mismatch_returns_none() -> None:
+    envelope = {"method": "GET", "url": "https://example.com/a"}
+    pending = [_page_body(url="https://example.com/b")]
+    assert _match_page_body_to_envelope(envelope, pending) is None
+
+
+def test_match_page_body_to_envelope_method_mismatch_returns_none() -> None:
+    envelope = {"method": "POST", "url": "https://example.com/api"}
+    pending = [_page_body(url="https://example.com/api", method="GET")]
+    assert _match_page_body_to_envelope(envelope, pending) is None
+
+
+def test_match_page_body_to_envelope_fifo_on_same_pair() -> None:
+    envelope = {"method": "GET", "url": "https://example.com/api"}
+    pending = [
+        _page_body(url="https://example.com/api", body="first"),
+        _page_body(url="https://example.com/api", body="second"),
+    ]
+    match = _match_page_body_to_envelope(envelope, pending)
+    assert match is not None
+    assert match["response_body"] == "first"
+
+
+def test_apply_page_body_sets_response_and_source_merged() -> None:
+    envelope = {
+        "method": "GET",
+        "url": "https://example.com/api",
+        "response_body": None,
+        "response_body_truncated": False,
+        "source": "webrequest",
+        "page_id": None,
+    }
+    pb = _page_body(url="https://example.com/api", body="hello", page_id="tbm-f-1")
+    _apply_page_body(envelope, pb, max_body_bytes=1024)
+    assert envelope["response_body"] == "hello"
+    assert envelope["response_body_truncated"] is False
+    assert envelope["source"] == "merged"
+    assert envelope["page_id"] == "tbm-f-1"
+
+
+def test_apply_page_body_clips_to_max_body_bytes() -> None:
+    envelope = {
+        "method": "GET",
+        "url": "https://example.com/api",
+        "response_body": None,
+        "response_body_truncated": False,
+        "source": "webrequest",
+        "page_id": None,
+    }
+    pb = _page_body(url="https://example.com/api", body="abcdef")
+    _apply_page_body(envelope, pb, max_body_bytes=3)
+    assert envelope["response_body"] == "abc"
+    assert envelope["response_body_truncated"] is True
+    assert envelope["source"] == "merged"
+
+
+def test_apply_page_body_preserves_page_side_truncation_flag() -> None:
+    envelope = {
+        "method": "GET",
+        "url": "https://example.com/api",
+        "response_body": None,
+        "response_body_truncated": False,
+        "source": "webrequest",
+        "page_id": None,
+    }
+    pb = _page_body(url="https://example.com/api", body="ok", truncated=True)
+    _apply_page_body(envelope, pb, max_body_bytes=1024)
+    assert envelope["response_body"] == "ok"
+    assert envelope["response_body_truncated"] is True
+
+
+def test_truncate_to_bytes_snaps_to_utf8_boundary() -> None:
+    # 'e\u0301' (e + combining acute) is 3 UTF-8 bytes (e=1 + accent=2).
+    text = "a\u00e9b"  # a + e-acute + b = 1 + 2 + 1 = 4 bytes
+    clipped, truncated = _truncate_to_bytes(text, 2)
+    assert truncated is True
+    assert clipped == "a"
+    assert clipped.encode("utf-8") == b"a"
+
+
+def test_truncate_to_bytes_no_clip_for_fitting_text() -> None:
+    clipped, truncated = _truncate_to_bytes("hello", 1024)
+    assert clipped == "hello"
+    assert truncated is False
+
+
+def test_finalize_capture_merges_page_body_into_webrequest_envelope() -> None:
+    state = _make_state()
+    apply_request_observed(
+        state,
+        {
+            "request_id": "r1",
+            "method": "GET",
+            "url": "https://example.com/api",
+        },
+    )
+    apply_response_observed(
+        state,
+        {
+            "request_id": "r1",
+            "status_code": 200,
+            "response_headers": {"Content-Type": "application/json"},
+        },
+    )
+    apply_body_observed(
+        state,
+        {
+            "url": "https://example.com/api",
+            "method": "GET",
+            "status_code": 200,
+            "response_headers": {"Content-Type": "application/json"},
+            "response_body": '{"ok": true}',
+            "page_id": "tbm-f-1",
+        },
+    )
+    entries = finalize_capture(state)
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["request_id"] == "r1"
+    assert entry["response_body"] == '{"ok": true}'
+    assert entry["source"] == "merged"
+    assert entry["page_id"] == "tbm-f-1"
+    # webRequest-side fields stay populated.
+    assert entry["status_code"] == 200
+    assert entry["response_headers"] == {"Content-Type": "application/json"}
+
+
+def test_finalize_capture_page_only_request_becomes_synthetic_envelope() -> None:
+    state = _make_state()
+    apply_body_observed(
+        state,
+        {
+            "url": "https://example.com/sw-only",
+            "method": "POST",
+            "status_code": 201,
+            "response_headers": {"Content-Type": "text/plain"},
+            "response_body": "made-by-service-worker",
+            "page_id": "tbm-x-7",
+            "observed_at": 1234.5,
+        },
+    )
+    entries = finalize_capture(state)
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["request_id"] is None
+    assert entry["method"] == "POST"
+    assert entry["url"] == "https://example.com/sw-only"
+    assert entry["status_code"] == 201
+    assert entry["response_body"] == "made-by-service-worker"
+    assert entry["source"] == "page"
+    assert entry["page_id"] == "tbm-x-7"
+    assert entry["completed_at"] == 1234.5
+
+
+def test_finalize_capture_webrequest_only_entry_keeps_source_webrequest() -> None:
+    state = _make_state()
+    apply_request_observed(
+        state,
+        {
+            "request_id": "r9",
+            "method": "GET",
+            "url": "https://cdn.example.com/img.png",
+        },
+    )
+    apply_response_observed(
+        state,
+        {
+            "request_id": "r9",
+            "status_code": 200,
+            "response_headers": {"Content-Type": "image/png"},
+        },
+    )
+    entries = finalize_capture(state)
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["source"] == "webrequest"
+    assert entry["response_body"] is None
+
+
+def test_finalize_capture_truncates_page_body_to_max_bytes() -> None:
+    state = _make_state(max_body_bytes=4)
+    apply_request_observed(
+        state,
+        {
+            "request_id": "r1",
+            "method": "GET",
+            "url": "https://example.com/api",
+        },
+    )
+    apply_body_observed(
+        state,
+        {
+            "url": "https://example.com/api",
+            "method": "GET",
+            "response_body": "abcdefgh",
+        },
+    )
+    entries = finalize_capture(state)
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["response_body"] == "abcd"
+    assert entry["response_body_truncated"] is True
+    assert entry["source"] == "merged"
+
+
+def test_finalize_capture_two_parallel_requests_pair_fifo() -> None:
+    state = _make_state()
+    apply_request_observed(
+        state,
+        {"request_id": "r1", "method": "GET", "url": "https://example.com/api"},
+    )
+    apply_request_observed(
+        state,
+        {"request_id": "r2", "method": "GET", "url": "https://example.com/api"},
+    )
+    apply_body_observed(
+        state,
+        {"url": "https://example.com/api", "method": "GET", "response_body": "first"},
+    )
+    apply_body_observed(
+        state,
+        {"url": "https://example.com/api", "method": "GET", "response_body": "second"},
+    )
+    entries = finalize_capture(state)
+    assert len(entries) == 2
+    r1 = next(e for e in entries if e["request_id"] == "r1")
+    r2 = next(e for e in entries if e["request_id"] == "r2")
+    assert r1["response_body"] == "first"
+    assert r2["response_body"] == "second"
+    assert r1["source"] == "merged"
+    assert r2["source"] == "merged"
+
+
+def test_envelope_from_page_body_marks_source_page_and_request_id_none() -> None:
+    pb = _page_body(
+        url="https://example.com/x",
+        method="PUT",
+        body="data",
+        status=204,
+        headers={"Content-Type": "text/plain"},
+        page_id="tbm-f-42",
+        observed_at=99.0,
+    )
+    entry = _envelope_from_page_body(pb, max_body_bytes=1024)
+    assert entry["request_id"] is None
+    assert entry["source"] == "page"
+    assert entry["page_id"] == "tbm-f-42"
+    assert entry["method"] == "PUT"
+    assert entry["url"] == "https://example.com/x"
+    assert entry["status_code"] == 204
+    assert entry["response_headers"] == {"Content-Type": "text/plain"}
+    assert entry["response_body"] == "data"
+    assert entry["completed_at"] == 99.0
+
+
+def test_capture_stop_subscribes_body_observed_event() -> None:
+    bridge = _FakeBridge()
+    drv = _Driver(bridge=bridge)
+    drv.browser_network_capture_start(patterns=["https://example.com/*"])
+    assert "body.observed" in bridge.subscribers
 
 
 # --- per-request envelope assembly -----------------------------------------

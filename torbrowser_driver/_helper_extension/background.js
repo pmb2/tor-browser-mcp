@@ -31,6 +31,130 @@ let offlineActive = false;
 // while onstop still does.
 const activeFilters = new Map();
 
+// Page-world override source. Runs inside the page realm (not the
+// content-script realm) so it can intercept the page's own fetch and
+// XMLHttpRequest, then posts results back to the content script via
+// window.postMessage. webRequest.filterResponseData.ondata does not
+// deliver payload bytes on Tor Browser 15 / Firefox 140 ESR, so this
+// path is what actually surfaces response bodies for JS-initiated
+// requests; webRequest still owns subresource metadata and errors.
+const PAGE_WORLD_OVERRIDE = String.raw`
+(function () {
+  if (window.__tbm_page_world_installed) return;
+  window.__tbm_page_world_installed = true;
+  var origFetch = window.fetch;
+  var origXhrOpen = XMLHttpRequest.prototype.open;
+  var origXhrSend = XMLHttpRequest.prototype.send;
+  var counter = 1;
+  function absolutize(u) {
+    try { return new URL(u, location.href).href; } catch (e) { return String(u || ""); }
+  }
+  function postBack(payload) {
+    try {
+      payload.__tbm_helper = true;
+      window.postMessage(payload, "*");
+    } catch (e) { /* ignore */ }
+  }
+  window.fetch = function (input, init) {
+    var id = "tbm-f-" + (counter++);
+    var url;
+    if (typeof input === "string") {
+      url = absolutize(input);
+    } else if (input && typeof input === "object" && typeof input.url === "string") {
+      url = absolutize(input.url);
+    } else {
+      url = "";
+    }
+    var method = "GET";
+    if (init && typeof init.method === "string") method = init.method;
+    else if (input && typeof input === "object" && typeof input.method === "string") method = input.method;
+    return origFetch.apply(this, arguments).then(function (response) {
+      try {
+        var clone = response.clone();
+        clone.text().then(function (text) {
+          var headerPairs = [];
+          try {
+            response.headers.forEach(function (value, name) {
+              headerPairs.push([name, value]);
+            });
+          } catch (e) { /* ignore */ }
+          postBack({
+            kind: "response_complete",
+            id: id,
+            url: response.url || url,
+            method: method,
+            status: response.status,
+            response_headers: headerPairs,
+            response_body: text
+          });
+        }).catch(function () { /* ignore */ });
+      } catch (e) { /* ignore */ }
+      return response;
+    });
+  };
+  XMLHttpRequest.prototype.open = function (method, url) {
+    this.__tbm_method = method;
+    this.__tbm_url = absolutize(url);
+    return origXhrOpen.apply(this, arguments);
+  };
+  XMLHttpRequest.prototype.send = function () {
+    var xhr = this;
+    var id = "tbm-x-" + (counter++);
+    xhr.addEventListener("loadend", function () {
+      try {
+        if (xhr.readyState !== 4 || xhr.status <= 0) return;
+        var raw = "";
+        try { raw = xhr.getAllResponseHeaders() || ""; } catch (e) { raw = ""; }
+        var lines = raw.replace(/\r/g, "").split("\n");
+        var headers = [];
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i];
+          if (!line) continue;
+          var idx = line.indexOf(":");
+          if (idx <= 0) continue;
+          headers.push([line.slice(0, idx).trim(), line.slice(idx + 1).trim()]);
+        }
+        var body = "";
+        try { body = xhr.responseText || ""; } catch (e) { body = ""; }
+        var finalUrl = xhr.responseURL || xhr.__tbm_url || "";
+        postBack({
+          kind: "response_complete",
+          id: id,
+          url: finalUrl,
+          method: xhr.__tbm_method || "GET",
+          status: xhr.status,
+          response_headers: headers,
+          response_body: body
+        });
+      } catch (e) { /* ignore */ }
+    });
+    return origXhrSend.apply(this, arguments);
+  };
+})();
+`;
+
+// Content-script body. Injects PAGE_WORLD_OVERRIDE into the page realm
+// via a <script> tag at document_start, then forwards page-world
+// postMessage frames to the background page over runtime.sendMessage.
+const CAPTURE_CONTENT_SCRIPT = String.raw`
+(function () {
+  if (window.__tbm_capture_cs_installed) return;
+  window.__tbm_capture_cs_installed = true;
+  var s = document.createElement("script");
+  s.textContent = ` + JSON.stringify(PAGE_WORLD_OVERRIDE) + String.raw`;
+  (document.head || document.documentElement).appendChild(s);
+  if (s.parentNode) s.parentNode.removeChild(s);
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (!data || data.__tbm_helper !== true) return;
+    try {
+      browser.runtime.sendMessage({ kind: "page_capture_event", payload: data })
+        .catch(function () { /* ignore */ });
+    } catch (e) { /* ignore */ }
+  });
+})();
+`;
+
 function logInfo(...args) {
   try { console.log("[tor-browser-mcp helper]", ...args); } catch (e) {}
 }
@@ -287,6 +411,69 @@ browser.webRequest.onBeforeRequest.addListener(
   { urls: ["<all_urls>"] },
   ["blocking"]
 );
+
+// Register the page-world override content script once. It runs in
+// every frame at document_start regardless of whether any capture is
+// open; the override is a thin function wrap with no work until a
+// fetch or XHR happens, and the background filters incoming page
+// events against the live capture table before forwarding to the
+// driver bridge.
+browser.contentScripts.register({
+  matches: ["<all_urls>"],
+  js: [{ code: CAPTURE_CONTENT_SCRIPT }],
+  runAt: "document_start",
+  allFrames: true,
+}).catch(function (e) { logError("page-capture content script register failed:", e); });
+
+function handlePageCaptureEvent(payload) {
+  if (!payload || typeof payload !== "object") return;
+  if (payload.kind !== "response_complete") return;
+  var url = typeof payload.url === "string" ? payload.url : "";
+  if (!url) return;
+  for (var entry of captures.values()) {
+    var patterns = entry.patterns || ["<all_urls>"];
+    var matched = false;
+    for (var i = 0; i < patterns.length; i++) {
+      if (matchPattern(url, patterns[i])) { matched = true; break; }
+    }
+    if (!matched) continue;
+    var maxBytes = entry.maxBodyBytes || 5 * 1024 * 1024;
+    var body = typeof payload.response_body === "string" ? payload.response_body : "";
+    var truncated = false;
+    if (body.length > maxBytes) {
+      body = body.substring(0, maxBytes);
+      truncated = true;
+    }
+    var headerList = Array.isArray(payload.response_headers) ? payload.response_headers : [];
+    var headerObj = {};
+    for (var k = 0; k < headerList.length; k++) {
+      var pair = headerList[k];
+      if (Array.isArray(pair) && typeof pair[0] === "string") {
+        headerObj[pair[0]] = pair[1] == null ? "" : String(pair[1]);
+      }
+    }
+    postEvent("body.observed", {
+      capture_id: entry.captureId,
+      page_id: typeof payload.id === "string" ? payload.id : "",
+      url: url,
+      method: typeof payload.method === "string" ? payload.method : "GET",
+      status_code: typeof payload.status === "number" ? payload.status : null,
+      response_headers: headerObj,
+      response_body: body,
+      response_body_truncated: truncated,
+      observed_at: Date.now(),
+    });
+  }
+}
+
+browser.runtime.onMessage.addListener(function (message) {
+  if (!message || message.kind !== "page_capture_event") return;
+  try {
+    handlePageCaptureEvent(message.payload);
+  } catch (e) {
+    logError("handlePageCaptureEvent failed:", e);
+  }
+});
 browser.webRequest.onBeforeSendHeaders.addListener(
   routeOnBeforeSendHeaders,
   { urls: ["<all_urls>"] },
@@ -469,6 +656,9 @@ function startCapture(params) {
   browser.webRequest.onErrorOccurred.addListener(onErrorOccurred, filter);
 
   captures.set(captureId, {
+    captureId: captureId,
+    patterns: patterns,
+    maxBodyBytes: maxBytes,
     onBeforeRequest: onBeforeRequest,
     onSendHeaders: onSendHeaders,
     onHeadersReceived: onHeadersReceived,
