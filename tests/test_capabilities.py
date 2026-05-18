@@ -292,6 +292,26 @@ def test_registered_methods_helper_extension_matches_expected_set() -> None:
     assert set(methods.keys()) == EXPECTED_HELPER_EXTENSION_METHODS
 
 
+EXPECTED_PROXY_INTERCEPT_METHODS = {
+    "browser_intercept_start",
+    "browser_intercept_stop",
+    "browser_intercept_flows",
+    "browser_intercept_flow",
+    "browser_intercept_save",
+}
+
+
+def test_proxy_intercept_is_known_optional_capability() -> None:
+    assert "proxy-intercept" in OPTIONAL_CAPABILITIES
+    assert "proxy-intercept" in KNOWN_CAPABILITIES
+    assert "proxy-intercept" not in DEFAULT_CAPABILITIES
+
+
+def test_registered_methods_proxy_intercept_matches_expected_set() -> None:
+    methods = registered_methods(TorBrowserDriver, {"proxy-intercept"})
+    assert set(methods.keys()) == EXPECTED_PROXY_INTERCEPT_METHODS
+
+
 def test_registered_methods_empty_caps_returns_empty() -> None:
     assert registered_methods(TorBrowserDriver, frozenset()) == {}
 

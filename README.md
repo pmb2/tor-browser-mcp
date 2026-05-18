@@ -67,6 +67,44 @@ The helper installs an unsigned MV2 extension via chrome-context Marionette and 
 
 When both capabilities are enabled they observe different layers and do not collide: the helper sees and routes requests at the browser layer, while `proxy-intercept` operates on the wire traffic that leaves the browser. A helper-mode mock that rewrites a request to a `data:` URL is invisible to the intercept proxy because the browser fulfils `data:` URLs locally.
 
+## Proxy intercept capability
+
+The `proxy-intercept` capability boots an embedded mitmproxy on a daemon thread chained out through the bundled tor's SOCKS port, installs a per-session MITM CA into the Tor Browser install via `policies.json`, and reconfigures Firefox to use the intercept proxy as its HTTP(S) upstream. Decrypted request and response bodies for HTTP/1.1, HTTP/2, and WebSocket traffic land in a bounded in-memory buffer that the five observation tools listed below read against.
+
+### Why it is opt-in
+
+Enabling this capability changes what Tor Browser looks like on the wire and disables one of its anonymity properties:
+
+- **Tor Browser's per-first-party circuit isolation is disabled** for the session: every flow is multiplexed through the same upstream proxy connection before being demultiplexed by mitmproxy onto tor circuits, so first-party isolation no longer holds.
+- **The local intercept proxy sees every page's plaintext.** Decrypted bodies live in memory in the driver process and are written to disk verbatim when `browser_intercept_save` is called.
+- **A per-session MITM CA is installed into the Tor Browser install directory.** The driver writes (or deep-merges into) `<tbb_root>/Browser/distribution/policies.json` and restores the prior state on teardown. This is destructive in the sense that it mutates the on-disk Tor Browser bundle for the lifetime of the session.
+- **The session is trivially distinguishable from default Tor Browser** via TLS client fingerprint, ALPN/HTTP-2 settings, and the proxy negotiation pattern. This is not a stealth mode; use it for adversary emulation, detection engineering, and protocol reversing against content you control or are authorised to inspect.
+- **Python 3.12+ is required for the optional extra.** `pip install tor-browser-mcp[proxy-intercept]` pulls in `mitmproxy>=11,<13`, which transitively requires `mitmproxy-rs>=0.12`. That wheel ships only `cp312-abi3` builds (Windows x86_64, manylinux x86_64, manylinux aarch64, macOS universal2). The core install stays at Python 3.10+; only this capability raises the floor.
+
+When the cap is in the enabled set, the MCP server emits the warning above (verbatim) to stderr at `build_server` time so a misconfigured deployment cannot accidentally start the server without the user seeing the trade-off.
+
+### Tool methods
+
+| Tool | Purpose |
+| --- | --- |
+| `browser_intercept_start` | Confirms the substrate is running and returns the recorder's monotonic cursor plus the CA fingerprint (SHA-256 of the DER) so callers can tail new flows. |
+| `browser_intercept_stop` | Clears the recorder buffer and resets the cursor; the daemon thread and proxy stay running for the rest of the session. |
+| `browser_intercept_flows` | Lists captured flows with optional `since`, `host`, and `status_code` filters, a result `limit`, and optional inlined bodies capped at `max_body_bytes`. |
+| `browser_intercept_flow` | Returns one captured flow by its mitmproxy-assigned id, with bodies inlined by default. |
+| `browser_intercept_save` | Persists the current buffer as a native mitmproxy flow archive under the configured output directory. |
+
+`browser_intercept_replay` lands in a future slice; replay-on-the-wire is not in this surface yet.
+
+### Known limitations
+
+- **HTTP/3 / QUIC is not intercepted.** mitmproxy's classic interception path covers HTTP/1.1 and HTTP/2. Firefox normally falls back to HTTP/2 against an HTTP-proxy upstream; if a destination ends up speaking HTTP/3 anyway, the resulting traffic is invisible to the recorder.
+- **HSTS-preloaded hosts cannot be MITM'd.** Firefox enforces the HSTS preload list independent of policy-installed CAs, so cert errors on preloaded hosts (Google properties, GitHub, Cloudflare, the social-network majors, etc.) are non-overridable. The capability records these as synthetic error flows; bodies are not available.
+- **No flow persistence across sessions.** `browser_intercept_save` writes an archive, but a fresh session cannot replay or re-load it through the tool surface in this slice.
+
+### Coexistence with `helper-extension`
+
+Both capabilities can be enabled together; the helper observes and routes at the browser layer, the intercept proxy operates on wire traffic, so neither hides flows from the other except for helper-mode mock routes that resolve to a `data:` URL (those never leave Firefox and stay invisible to the intercept proxy).
+
 ## Filesystem policy
 
 Tool calls that read or write files are resolved through a path policy: outputs land under `--output-dir`, and reads are restricted to MCP roots, the server cwd, and any `--allowed-root` directories. `--allow-unrestricted-file-access` disables the guardrail. This is a convenience boundary, not a sandbox.

@@ -57,6 +57,7 @@ class FlowRecorder:
         self._lock = threading.Lock()
         self._next = 0
         self._by_id: dict[str, dict] = {}
+        self._raw_by_id: dict[str, "HTTPFlow"] = {}
 
     @property
     def buffer(self) -> Sequence[dict]:
@@ -67,6 +68,42 @@ class FlowRecorder:
     def next_since(self) -> int:
         with self._lock:
             return self._next
+
+    def flow_by_id(self, flow_id: str) -> "HTTPFlow | None":
+        """Return the raw ``HTTPFlow`` for ``flow_id`` or ``None``.
+
+        Synthetic entries (e.g. ``tls_failed_client``) have no raw flow
+        and return ``None`` even if ``flow_id`` matches a buffer entry.
+        """
+
+        with self._lock:
+            return self._raw_by_id.get(flow_id)
+
+    def raw_flows_snapshot(self) -> list["HTTPFlow"]:
+        """Return raw ``HTTPFlow`` objects in buffer (insertion) order.
+
+        Synthetic entries without a raw flow are skipped.
+        """
+
+        with self._lock:
+            out: list["HTTPFlow"] = []
+            for entry in self._buffer:
+                fid = entry.get("id")
+                if not isinstance(fid, str):
+                    continue
+                raw = self._raw_by_id.get(fid)
+                if raw is not None:
+                    out.append(raw)
+            return out
+
+    def clear(self) -> None:
+        """Empty the buffer and reset the monotonic cursor to 0."""
+
+        with self._lock:
+            self._buffer.clear()
+            self._by_id.clear()
+            self._raw_by_id.clear()
+            self._next = 0
 
     def request(self, flow: "HTTPFlow") -> None:
         self._record(flow)
@@ -102,6 +139,7 @@ class FlowRecorder:
     def _record(self, flow: "HTTPFlow") -> None:
         serialised = self._serialise(flow)
         with self._lock:
+            self._raw_by_id[serialised["id"]] = flow
             existing = self._by_id.get(serialised["id"])
             if existing is not None:
                 preserved_since = existing["since"]
@@ -119,7 +157,10 @@ class FlowRecorder:
         self._next += 1
         if len(self._buffer) == self._buffer.maxlen:
             evicted = self._buffer[0]
-            self._by_id.pop(evicted.get("id", ""), None)
+            evicted_id = evicted.get("id", "")
+            self._by_id.pop(evicted_id, None)
+            if isinstance(evicted_id, str):
+                self._raw_by_id.pop(evicted_id, None)
         self._buffer.append(entry)
         flow_id = entry.get("id")
         if isinstance(flow_id, str):
@@ -253,6 +294,32 @@ class ProxyManager:
     @property
     def next_since(self) -> int:
         return self._recorder.next_since
+
+    def flow_by_id(self, flow_id: str) -> Any:
+        """Return the raw ``mitmproxy.http.HTTPFlow`` for ``flow_id``.
+
+        ``None`` when the id is unknown or refers to a synthetic
+        (no-raw-flow) entry such as a ``tls_failed_client`` record.
+        """
+
+        return self._recorder.flow_by_id(flow_id)
+
+    def raw_flows_snapshot(self) -> list[Any]:
+        """Snapshot of the buffer's raw ``HTTPFlow`` objects in order."""
+
+        return self._recorder.raw_flows_snapshot()
+
+    def clear_buffer(self) -> int:
+        """Empty the recorder buffer; return the count of evicted entries.
+
+        ``buffer`` snapshot + ``clear`` are taken under the recorder's
+        lock individually; a flow may race in between, but that race
+        is harmless for the count-then-clear semantics callers rely on.
+        """
+
+        count = len(self._recorder.buffer)
+        self._recorder.clear()
+        return count
 
     def is_alive(self) -> bool:
         thread = self._thread

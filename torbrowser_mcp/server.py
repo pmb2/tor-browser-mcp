@@ -14,6 +14,7 @@ import asyncio
 import inspect
 import json
 import logging
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -33,6 +34,18 @@ from .schema import tool_description, tool_input_schema
 
 
 log = logging.getLogger(__name__)
+
+
+PROXY_INTERCEPT_STARTUP_WARNING = (
+    "WARNING: proxy-intercept enabled. Tor Browser's per-first-party\n"
+    "circuit isolation is disabled for this session, and the local\n"
+    "intercept proxy sees every page's plaintext. Decrypted bodies are\n"
+    "held in memory and may be written to disk by browser_intercept_save.\n"
+    "This is opt-in and intended for adversary-emulation, detection-\n"
+    "engineering, and protocol-reverse-engineering use cases against\n"
+    "content you control or are authorised to inspect. It is not a\n"
+    "stealth mode."
+)
 
 
 @dataclass(frozen=True)
@@ -169,9 +182,13 @@ def build_server(
     responses (``isError=True``).
     """
 
+    enabled_set = frozenset(enabled_caps)
+    if "proxy-intercept" in enabled_set:
+        print(PROXY_INTERCEPT_STARTUP_WARNING, file=sys.stderr)
+
     registry = _ToolRegistry()
 
-    for tool_name, unbound in registered_methods(TorBrowserDriver, enabled_caps).items():
+    for tool_name, unbound in registered_methods(TorBrowserDriver, enabled_set).items():
         schema = tool_input_schema(unbound)
         description = tool_description(unbound)
         handler = _make_driver_handler(driver, tool_name)

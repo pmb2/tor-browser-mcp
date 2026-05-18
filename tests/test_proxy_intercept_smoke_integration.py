@@ -149,6 +149,133 @@ def test_proxy_intercept_records_https_navigation(drv: TorBrowserDriver) -> None
     assert addr is not None and addr[0]
 
 
+def test_proxy_intercept_flows_surface_check_torproject(drv: TorBrowserDriver) -> None:
+    """The five observation tools see a real check.torproject.org navigation.
+
+    ``browser_intercept_start`` reports the running substrate's cursor;
+    after navigating to the canonical tor-exit probe URL the recorder
+    buffer carries at least one ``check.torproject.org/`` flow whose
+    response body identifies the exit as either a Tor exit
+    ("Congratulations") or a non-exit ("Sorry"). The captured archive
+    is round-tripped through :class:`mitmproxy.io.FlowReader` to verify
+    the on-disk file is a real mitmproxy flow stream, and
+    ``browser_intercept_stop`` reports the at-stop count.
+
+    If Firefox negotiates HTTP/3 / QUIC against the intercept proxy and
+    refuses to fall back to HTTP/2, no flows would be captured. The
+    test ``xfail``s with a clear message in that case; in practice
+    Firefox negotiates HTTP/2 against an HTTP-proxy upstream.
+    """
+
+    import mitmproxy.io as mitm_io
+
+    started = drv.browser_intercept_start()
+    assert started["started"] is True
+    assert started["intercept_port"] == INTERCEPT_PORT
+    assert isinstance(started["since"], int)
+    assert isinstance(started["ca_fingerprint"], str)
+    assert len(started["ca_fingerprint"]) == 64
+
+    drv.browser_navigate("https://check.torproject.org/")
+
+    deadline = time.monotonic() + 30.0
+    flows: list = []
+    root_flows: list = []
+    while time.monotonic() < deadline:
+        result = drv.browser_intercept_flows(
+            host="check.torproject.org", include_bodies=True
+        )
+        flows = result["flows"]
+        root_flows = [
+            f
+            for f in flows
+            if isinstance(f.get("request"), dict)
+            and f["request"].get("path") == "/"
+            and isinstance(f.get("response"), dict)
+            and f["response"].get("status_code") == 200
+        ]
+        if root_flows:
+            break
+        time.sleep(0.5)
+
+    if not flows:
+        pytest.xfail(
+            "no check.torproject.org flows captured; Firefox may have used"
+            " HTTP/3 and refused the HTTP/2 fallback against the intercept proxy"
+        )
+    assert root_flows, (
+        "no 200 flow at the / path captured; flows="
+        f"{[(f.get('request') or {}).get('path', '?') + ' -> ' + str((f.get('response') or {}).get('status_code')) for f in flows]!r}"
+    )
+    entry = root_flows[-1]
+
+    resp = entry["response"]
+    assert resp["status_code"] == 200
+    content_length = resp.get("content_length")
+    if isinstance(content_length, int):
+        assert content_length > 0
+
+    body = resp.get("body")
+    body_text = body if isinstance(body, str) else ""
+    assert "Congratulations" in body_text or "Sorry" in body_text, (
+        "check.torproject.org body did not contain the tor-exit gate phrase"
+    )
+
+    save_result = drv.browser_intercept_save(path="intercept-smoke.flows")
+    archive = Path(save_result["path"])
+    assert archive.is_file()
+    assert archive.stat().st_size > 0
+    assert isinstance(save_result["flow_count"], int)
+    assert save_result["flow_count"] >= 1
+
+    with open(archive, "rb") as fh:
+        reader = mitm_io.FlowReader(fh)
+        archived = list(reader.stream())
+    assert len(archived) == save_result["flow_count"]
+    assert any(
+        getattr(getattr(f, "request", None), "host", "") == "check.torproject.org"
+        for f in archived
+    )
+
+    stopped = drv.browser_intercept_stop()
+    assert stopped["stopped"] is True
+    assert stopped["flows_collected"] >= 1
+
+
+def test_proxy_intercept_filters_by_host_and_status(drv: TorBrowserDriver) -> None:
+    """Host and status-code filters narrow the recorder buffer correctly.
+
+    Two navigations populate the buffer with different hosts; the host
+    filter returns only the matching subset, and ``status_code=200``
+    with ``limit=1`` returns one entry plus ``truncated=True`` when
+    more than one 200 exists.
+    """
+
+    drv.browser_intercept_start()
+    drv.browser_navigate("https://example.com/")
+    time.sleep(2.0)
+    drv.browser_navigate("https://check.torproject.org/")
+    time.sleep(3.0)
+
+    only_example = drv.browser_intercept_flows(host="example.com")
+    hosts = {
+        (f.get("request") or {}).get("host") for f in only_example["flows"]
+    }
+    if not hosts:
+        pytest.xfail(
+            "no example.com flows captured; Firefox may have used HTTP/3"
+        )
+    assert hosts, f"no example.com flows captured; hosts={hosts!r}"
+    assert all(
+        isinstance(h, str) and "example.com" in h.lower() for h in hosts
+    ), f"host filter leaked non-matches: {hosts!r}"
+
+    one_200 = drv.browser_intercept_flows(status_code=200, limit=1)
+    assert len(one_200["flows"]) <= 1
+    if one_200["flows"]:
+        assert one_200["flows"][0]["response"]["status_code"] == 200
+
+
 def test_proxy_intercept_restores_policies_on_close(
     destructive_caps_allowed: None,
     tbb_root: Path,

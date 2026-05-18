@@ -35,6 +35,7 @@ from ._proxy_intercept_policies import (
     install_certificate_policy,
     restore_certificate_policy,
 )
+from ._proxy_intercept_primitives import _ProxyInterceptCapabilityMixin
 from ._proxy_intercept_substrate import ProxyManager
 from ._state_primitives import _StateCapabilityMixin
 from ._tor_primitives import _TorCapabilityMixin
@@ -63,6 +64,7 @@ class TorBrowserDriver(
     _PdfCapabilityMixin,
     _HttpOverTorCapabilityMixin,
     _HelperExtensionCapabilityMixin,
+    _ProxyInterceptCapabilityMixin,
 ):
     """Boot tor + Tor Browser, expose the underlying selenium/stem handles.
 
