@@ -1,11 +1,13 @@
 """Proxy-intercept capability surface.
 
 Rides on top of :class:`~torbrowser_driver._proxy_intercept_substrate.ProxyManager`
-and exposes five observation tools tagged ``@capability("proxy-intercept")``:
+and exposes six tools tagged ``@capability("proxy-intercept")``:
 status (``browser_intercept_start``), teardown of the recorder buffer
 (``browser_intercept_stop``), bulk listing (``browser_intercept_flows``),
-single-flow lookup (``browser_intercept_flow``), and persistence to a
-mitmproxy-native flow archive (``browser_intercept_save``).
+single-flow lookup (``browser_intercept_flow``), persistence to a
+mitmproxy-native flow archive (``browser_intercept_save``), and
+client-replay of a captured flow with optional modifications
+(``browser_intercept_replay``).
 
 The substrate itself is started in :meth:`TorBrowserDriver.__enter__` and
 torn down on close; the ``start``/``stop`` tools here drive only the
@@ -18,6 +20,7 @@ from __future__ import annotations
 
 import base64
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from .capabilities import capability
 from .exceptions import ProxyInterceptError
@@ -30,6 +33,149 @@ if TYPE_CHECKING:
 _DEFAULT_FLOWS_BODY_LIMIT = 1 * 1024 * 1024
 _DEFAULT_FLOW_BODY_LIMIT = 5 * 1024 * 1024
 _DEFAULT_FLOWS_RESULT_LIMIT = 200
+_DEFAULT_REPLAY_TIMEOUT = 30.0
+
+_ALLOWED_HTTP_METHODS = frozenset(
+    {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+)
+_ALLOWED_HTTP_VERSIONS = frozenset({"HTTP/1.0", "HTTP/1.1", "HTTP/2.0"})
+_REPLAY_MODIFICATION_KEYS = frozenset(
+    {
+        "method",
+        "url",
+        "http_version",
+        "set_request_headers",
+        "remove_request_headers",
+        "body",
+        "body_base64",
+    }
+)
+
+
+def _apply_replay_modifications(flow: Any, **modifications: Any) -> None:
+    """Mutate ``flow.request`` in place according to ``modifications``.
+
+    The accepted keys are:
+
+    - ``method``: replaces ``flow.request.method``; the value must be
+      one of the standard HTTP verbs (case-insensitive on input,
+      uppercased before assignment).
+    - ``url``: parsed with :func:`urllib.parse.urlparse`; must carry
+      both a scheme and a host. Assigned via the ``Request.url``
+      setter so host / path / scheme update together.
+    - ``http_version``: replaces ``flow.request.http_version``; must be
+      one of ``HTTP/1.0``, ``HTTP/1.1``, ``HTTP/2.0``.
+    - ``set_request_headers``: case-insensitive merge into
+      ``flow.request.headers``. mitmproxy's ``Headers`` container
+      already treats names case-insensitively, so assigning
+      ``headers[name] = value`` replaces any existing entry of the
+      same name.
+    - ``remove_request_headers``: case-insensitive removal; missing
+      names are ignored.
+    - ``body`` / ``body_base64``: mutually exclusive request body
+      replacement. ``body`` is UTF-8 encoded; ``body_base64`` is
+      base64-decoded. When neither is supplied, the source body
+      survives unchanged.
+
+    Unknown keys raise :class:`ValueError`. The caller is expected to
+    have deep-copied the source flow before calling this helper; the
+    function does not copy on the caller's behalf.
+    """
+
+    unknown = set(modifications) - _REPLAY_MODIFICATION_KEYS
+    if unknown:
+        raise ValueError(
+            f"unknown replay modification keys: {sorted(unknown)!r}"
+        )
+
+    body = modifications.get("body")
+    body_base64 = modifications.get("body_base64")
+    if body is not None and body_base64 is not None:
+        raise ValueError(
+            "body and body_base64 are mutually exclusive"
+        )
+
+    method = modifications.get("method")
+    if method is not None:
+        if not isinstance(method, str) or not method:
+            raise ValueError("method must be a non-empty string")
+        normalised = method.upper()
+        if normalised not in _ALLOWED_HTTP_METHODS:
+            raise ValueError(
+                f"method {method!r} is not one of {sorted(_ALLOWED_HTTP_METHODS)!r}"
+            )
+        flow.request.method = normalised
+
+    url = modifications.get("url")
+    if url is not None:
+        if not isinstance(url, str) or not url:
+            raise ValueError("url must be a non-empty string")
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError(
+                f"url {url!r} must include both scheme and host"
+            )
+        flow.request.url = url
+
+    http_version = modifications.get("http_version")
+    if http_version is not None:
+        if (
+            not isinstance(http_version, str)
+            or http_version not in _ALLOWED_HTTP_VERSIONS
+        ):
+            raise ValueError(
+                f"http_version {http_version!r} is not one of"
+                f" {sorted(_ALLOWED_HTTP_VERSIONS)!r}"
+            )
+        flow.request.http_version = http_version
+
+    set_headers = modifications.get("set_request_headers")
+    if set_headers is not None:
+        if not isinstance(set_headers, dict):
+            raise ValueError(
+                "set_request_headers must be a dict of name -> value"
+            )
+        for name, value in set_headers.items():
+            if not isinstance(name, str) or not name:
+                raise ValueError(
+                    f"set_request_headers key must be a non-empty string;"
+                    f" got {name!r}"
+                )
+            if not isinstance(value, str):
+                raise ValueError(
+                    f"set_request_headers value for {name!r} must be a string"
+                )
+            flow.request.headers[name] = value
+
+    remove_headers = modifications.get("remove_request_headers")
+    if remove_headers is not None:
+        if not isinstance(remove_headers, (list, tuple)):
+            raise ValueError(
+                "remove_request_headers must be a list of header names"
+            )
+        for name in remove_headers:
+            if not isinstance(name, str) or not name:
+                raise ValueError(
+                    f"remove_request_headers entry must be a non-empty"
+                    f" string; got {name!r}"
+                )
+            try:
+                del flow.request.headers[name]
+            except KeyError:
+                pass
+
+    if body is not None:
+        if not isinstance(body, str):
+            raise ValueError("body must be a string")
+        flow.request.content = body.encode("utf-8")
+    elif body_base64 is not None:
+        if not isinstance(body_base64, str):
+            raise ValueError("body_base64 must be a string")
+        try:
+            decoded = base64.b64decode(body_base64, validate=True)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"body_base64 is not valid base64: {exc}") from exc
+        flow.request.content = decoded
 
 
 def _decode_body(buf: bytes, max_body_bytes: int) -> tuple[Any, bool]:
@@ -381,4 +527,109 @@ class _ProxyInterceptCapabilityMixin:
         return {
             "path": str(resolved),
             "flow_count": len(raw_flows),
+        }
+
+    @capability("proxy-intercept")
+    def browser_intercept_replay(
+        self,
+        flow_id: str,
+        *,
+        method: str | None = None,
+        url: str | None = None,
+        http_version: str | None = None,
+        set_request_headers: dict[str, str] | None = None,
+        remove_request_headers: list[str] | None = None,
+        body: str | None = None,
+        body_base64: str | None = None,
+        timeout: float = _DEFAULT_REPLAY_TIMEOUT,
+    ) -> dict[str, Any]:
+        """Replay a captured flow as a new request, optionally modified.
+
+        Looks up the source flow by ``flow_id`` in the recorder buffer,
+        deep-copies it (the source is not mutated), applies the
+        supplied modifications, and dispatches the copy through
+        mitmproxy's client-replay path. The dispatched flow surfaces in
+        the recorder buffer as a fresh entry with its own monotonic
+        ``since`` index and its own id; full request / response detail
+        is available through :meth:`browser_intercept_flow` against
+        the returned ``replay_flow_id``.
+
+        Modification semantics match :func:`_apply_replay_modifications`:
+        ``body`` is UTF-8 encoded, ``body_base64`` is base64-decoded,
+        the two are mutually exclusive, and any ``Cookie`` header from
+        the source request survives the copy unless explicitly
+        overridden via ``set_request_headers`` or removed via
+        ``remove_request_headers``.
+
+        Returns ``{"replay_flow_id": str, "source_flow_id": str,
+        "since": int, "request": {...}}``. The echoed ``request`` dict
+        carries ``method``, ``url``, ``http_version``, and the final
+        headers as a list of ``[name, value]`` pairs.
+
+        Raises :class:`ValueError` for an unknown ``flow_id``, for a
+        synthetic ``tls_failed_client`` entry that has no raw flow to
+        replay, or for any invalid modification value. Raises
+        :class:`ProxyInterceptError` when the substrate is not running
+        or when the replay does not complete within ``timeout``.
+        """
+
+        if not isinstance(flow_id, str) or not flow_id:
+            raise ValueError("flow_id must be a non-empty string")
+        if not isinstance(timeout, (int, float)) or isinstance(timeout, bool):
+            raise ValueError("timeout must be a number")
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
+
+        self._proxy_alive_check()
+        mgr = self._proxy_manager
+        assert mgr is not None
+
+        source_flow = mgr.flow_by_id(flow_id)
+        if source_flow is None:
+            raise ValueError(
+                f"flow_id {flow_id!r} is not in the recorder buffer"
+                f" (or refers to a synthetic entry with no raw flow)"
+            )
+
+        replay_flow = source_flow.copy()
+        _apply_replay_modifications(
+            replay_flow,
+            **{
+                k: v
+                for k, v in {
+                    "method": method,
+                    "url": url,
+                    "http_version": http_version,
+                    "set_request_headers": set_request_headers,
+                    "remove_request_headers": remove_request_headers,
+                    "body": body,
+                    "body_base64": body_base64,
+                }.items()
+                if v is not None
+            },
+        )
+
+        new_id = mgr.replay_flow(replay_flow, timeout=float(timeout))
+
+        new_since: int | None = None
+        for entry in mgr.flow_buffer:
+            if entry.get("id") == new_id:
+                es = entry.get("since")
+                if isinstance(es, int):
+                    new_since = es
+                break
+
+        return {
+            "replay_flow_id": new_id,
+            "source_flow_id": flow_id,
+            "since": new_since if new_since is not None else 0,
+            "request": {
+                "method": replay_flow.request.method,
+                "url": replay_flow.request.url,
+                "http_version": replay_flow.request.http_version,
+                "headers": [
+                    list(item)
+                    for item in replay_flow.request.headers.items(multi=True)
+                ],
+            },
         }

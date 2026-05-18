@@ -92,8 +92,7 @@ When the cap is in the enabled set, the MCP server emits the warning above (verb
 | `browser_intercept_flows` | Lists captured flows with optional `since`, `host`, and `status_code` filters, a result `limit`, and optional inlined bodies capped at `max_body_bytes`. |
 | `browser_intercept_flow` | Returns one captured flow by its mitmproxy-assigned id, with bodies inlined by default. |
 | `browser_intercept_save` | Persists the current buffer as a native mitmproxy flow archive under the configured output directory. |
-
-`browser_intercept_replay` lands in a future slice; replay-on-the-wire is not in this surface yet.
+| `browser_intercept_replay` | Deep-copies a captured flow, applies optional request modifications (method, URL, headers, body, HTTP version), and replays it through the live intercept proxy; the replay surfaces as a new entry in the recorder buffer. |
 
 ### Known limitations
 

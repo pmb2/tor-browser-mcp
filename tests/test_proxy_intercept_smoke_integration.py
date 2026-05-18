@@ -276,6 +276,78 @@ def test_proxy_intercept_filters_by_host_and_status(drv: TorBrowserDriver) -> No
         assert one_200["flows"][0]["response"]["status_code"] == 200
 
 
+def test_proxy_intercept_replay_with_modified_user_agent(drv: TorBrowserDriver) -> None:
+    """A captured flow can be replayed with a modified ``User-Agent`` header.
+
+    Navigates to a known-200 page through the live intercept proxy,
+    locates the source flow, replays it with a custom ``User-Agent``
+    via :meth:`browser_intercept_replay`, then fetches the new flow and
+    asserts both the replay surfaced under a fresh id and the response
+    is a 200. The body content gate from the observation smoke is
+    intentionally not re-applied here -- the live response from
+    check.torproject.org may differ between the source navigation and
+    the replay, but the replay's existence and status are stable
+    signals.
+    """
+
+    drv.browser_intercept_start()
+    drv.browser_navigate("https://check.torproject.org/")
+
+    deadline = time.monotonic() + 30.0
+    source_id: str | None = None
+    while time.monotonic() < deadline:
+        result = drv.browser_intercept_flows(host="check.torproject.org")
+        candidates = [
+            f
+            for f in result["flows"]
+            if isinstance(f.get("request"), dict)
+            and f["request"].get("path") == "/"
+            and isinstance(f.get("response"), dict)
+            and f["response"].get("status_code") == 200
+        ]
+        if candidates:
+            source_id = candidates[-1]["id"]
+            break
+        time.sleep(0.5)
+
+    if source_id is None:
+        pytest.xfail(
+            "no source flow captured for check.torproject.org; replay cannot proceed"
+        )
+
+    replay = drv.browser_intercept_replay(
+        flow_id=source_id,
+        set_request_headers={"User-Agent": "tor-browser-mcp-replay/1.0"},
+    )
+
+    assert replay["source_flow_id"] == source_id
+    assert replay["replay_flow_id"] != source_id
+    assert isinstance(replay["since"], int)
+    echoed_ua = [
+        v for (n, v) in replay["request"]["headers"] if n.lower() == "user-agent"
+    ]
+    assert echoed_ua == ["tor-browser-mcp-replay/1.0"], (
+        f"echoed request headers did not carry the override: {echoed_ua!r}"
+    )
+
+    full = drv.browser_intercept_flow(
+        flow_id=replay["replay_flow_id"], include_bodies=True
+    )
+    assert full["id"] == replay["replay_flow_id"]
+    request_headers = full.get("request", {}).get("headers") or []
+    ua_values = [v for (n, v) in request_headers if n.lower() == "user-agent"]
+    assert ua_values == ["tor-browser-mcp-replay/1.0"], (
+        f"replay flow did not carry the User-Agent override: {ua_values!r}"
+    )
+    response = full.get("response")
+    assert isinstance(response, dict), (
+        f"replay produced no response: full={full!r}"
+    )
+    assert response.get("status_code") == 200, (
+        f"replay response was not 200: {response.get('status_code')!r}"
+    )
+
+
 def test_proxy_intercept_restores_policies_on_close(
     destructive_caps_allowed: None,
     tbb_root: Path,

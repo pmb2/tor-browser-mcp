@@ -96,6 +96,12 @@ class FlowRecorder:
                     out.append(raw)
             return out
 
+    def raw_ids_snapshot(self) -> set[str]:
+        """Return the set of raw-flow ids currently in the buffer."""
+
+        with self._lock:
+            return set(self._raw_by_id.keys())
+
     def clear(self) -> None:
         """Empty the buffer and reset the monotonic cursor to 0."""
 
@@ -308,6 +314,61 @@ class ProxyManager:
         """Snapshot of the buffer's raw ``HTTPFlow`` objects in order."""
 
         return self._recorder.raw_flows_snapshot()
+
+    def replay_flow(self, flow: Any, timeout: float = 30.0) -> str:
+        """Submit ``flow`` to mitmproxy's client replay and wait for completion.
+
+        ``flow`` must be a fresh ``HTTPFlow`` (a deep-copy of a captured
+        flow with its own id); the recorder will pick it up under its
+        own id and surface it as a new buffer entry. Returns the new
+        flow's id once the response has been received.
+
+        Raises :class:`ProxyInterceptError` when the substrate is not
+        running, when the replay command fails to dispatch, or when the
+        timeout elapses without a completed replay.
+        """
+
+        loop = self._loop
+        master = self._master
+        if loop is None or master is None or not self.is_alive():
+            raise ProxyInterceptError(
+                "replay_flow called while the substrate is not running"
+            )
+
+        flow_id = getattr(flow, "id", None)
+        if not isinstance(flow_id, str) or not flow_id:
+            raise ProxyInterceptError(
+                "replay_flow requires a flow with a string id"
+            )
+
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        known_ids = self._recorder.raw_ids_snapshot()
+
+        async def _dispatch() -> None:
+            master.commands.call("replay.client", [flow])
+
+        future = asyncio.run_coroutine_threadsafe(_dispatch(), loop)
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            future.result(timeout=remaining if remaining > 0 else 0.001)
+        except Exception as exc:  # noqa: BLE001
+            future.cancel()
+            raise ProxyInterceptError(
+                f"replay dispatch failed: {exc!r}"
+            ) from exc
+
+        while True:
+            raw = self._recorder.flow_by_id(flow_id)
+            if raw is not None and flow_id not in known_ids:
+                response = getattr(raw, "response", None)
+                error = getattr(raw, "error", None)
+                if response is not None or error is not None:
+                    return flow_id
+            if time.monotonic() >= deadline:
+                raise ProxyInterceptError(
+                    f"replay did not complete within {timeout:.1f}s"
+                )
+            time.sleep(0.05)
 
     def clear_buffer(self) -> int:
         """Empty the recorder buffer; return the count of evicted entries.

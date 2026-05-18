@@ -298,6 +298,7 @@ EXPECTED_PROXY_INTERCEPT_METHODS = {
     "browser_intercept_flows",
     "browser_intercept_flow",
     "browser_intercept_save",
+    "browser_intercept_replay",
 }
 
 
