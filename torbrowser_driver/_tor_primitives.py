@@ -257,11 +257,12 @@ class _TorCapabilityMixin:
     def tor_new_identity(
         self, wait: bool = True, post_signal_sleep: float = 8.0
     ) -> dict[str, Any]:
-        """Send ``NEWNYM`` to the controller to request a fresh circuit.
+        """Send NEWNYM to request a fresh tor circuit; tor enforces a
+        ten-second cooldown between NEWNYM signals.
 
-        Tor enforces a ten-second cooldown between ``NEWNYM`` signals. When
-        ``wait`` is true the method sleeps ``post_signal_sleep`` seconds
-        before returning so subsequent calls do not race the cooldown.
+        When ``wait`` is true the method sleeps ``post_signal_sleep``
+        seconds before returning so subsequent calls do not race the
+        cooldown.
         """
 
         ctrl = self._require_controller()
@@ -274,12 +275,14 @@ class _TorCapabilityMixin:
 
     @capability("tor")
     def tor_circuit_status(self, verbose: bool = False) -> dict[str, Any]:
-        """Parse ``GETINFO circuit-status`` into structured circuit entries.
+        """List the active tor circuits and their relay paths; useful for
+        confirming a NEWNYM rotation took effect and for inspecting which
+        exit a request is leaving through.
 
         Each circuit carries ``id``, ``status``, and ``path`` (a list of
         ``{fingerprint, nickname}`` hops). When ``verbose`` is true the
         ``build_flags``, ``purpose``, and ``time_created`` fields are
-        included as well.
+        included as well. Implemented via stem's GETINFO circuit-status.
         """
 
         ctrl = self._require_controller()
@@ -298,10 +301,12 @@ class _TorCapabilityMixin:
 
     @capability("tor")
     def tor_stream_status(self) -> dict[str, Any]:
-        """Parse ``GETINFO stream-status`` into structured stream entries.
+        """List the active tor streams and the circuits they are bound to;
+        useful for tracing which page request is travelling over which
+        circuit.
 
         Each stream carries ``id``, ``status``, ``circuit_id``, and
-        ``target``.
+        ``target``. Implemented via stem's GETINFO stream-status.
         """
 
         ctrl = self._require_controller()
@@ -315,7 +320,13 @@ class _TorCapabilityMixin:
 
     @capability("tor")
     def tor_entry_guards(self) -> dict[str, Any]:
-        """Parse ``GETINFO entry-guards`` into ``{fingerprint, nickname, status}``."""
+        """List the entry guards tor is using to enter the network; useful
+        for inspecting which long-lived first-hop relays the current
+        session is bound to.
+
+        Each guard is reported as ``{fingerprint, nickname, status}``.
+        Implemented via stem's GETINFO entry-guards.
+        """
 
         ctrl = self._require_controller()
         raw = ctrl.get_info("entry-guards") or ""
@@ -328,11 +339,14 @@ class _TorCapabilityMixin:
 
     @capability("tor")
     def tor_get_info(self, keys: list[str]) -> dict[str, Any]:
-        """Issue an allowlisted ``GETINFO`` against the controller.
+        """Read one or more allowlisted, read-only tor control values for
+        diagnostics (version, uptime, traffic counters, and similar) without
+        granting arbitrary control-port access.
 
         ``keys`` must be drawn from a read-only allowlist; any other key
-        raises :class:`ValueError`. The result is ``{"info": {key: value}}``
-        with the controller's raw string reply per key.
+        raises ``ValueError``. The result is ``{"info": {key: value}}``
+        with the controller's raw string reply per key. Implemented via
+        stem's GETINFO.
         """
 
         for key in keys:

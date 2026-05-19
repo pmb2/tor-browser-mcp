@@ -129,12 +129,12 @@ class _DiagnosticsCapabilityMixin:
 
     @capability("diagnostics")
     def browser_get_config(self) -> dict[str, Any]:
-        """Return a JSON-safe snapshot of the active :class:`DriverConfig`.
+        """Return a JSON-safe snapshot of the active DriverConfig.
 
         Paths are stringified, ``enabled_caps`` is rendered as a sorted
-        list, and the :class:`PathPolicy`'s ``output_dir`` and
-        ``allowed_roots`` are surfaced as strings so the result can flow
-        straight back through an MCP tool boundary.
+        list, and the PathPolicy's ``output_dir`` and ``allowed_roots``
+        are surfaced as strings so the result can flow straight back
+        through an MCP tool boundary.
         """
 
         config = self.config

@@ -894,10 +894,10 @@ class _HelperExtensionCapabilityMixin:
 
     @capability("helper-extension")
     def browser_remove_init_script(self, script_id: str) -> dict[str, Any]:
-        """Unregister an init script previously returned by
-        :meth:`browser_add_init_script`.
+        """Unregister an init script previously installed by
+        browser_add_init_script.
 
-        Raises :class:`ValueError` if ``script_id`` is unknown.
+        Raises ``ValueError`` if ``script_id`` is unknown.
         """
 
         scripts = self._init_scripts_set()

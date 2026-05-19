@@ -62,15 +62,16 @@ class _TorRoutingCapabilityMixin:
     def tor_set_exit_country(
         self, country_code: str, strict: bool = False
     ) -> dict[str, Any]:
-        """Pin tor's exit selection to a two-letter ISO country.
+        """Pin tor's exit selection to a two-letter ISO country, narrowing
+        the anonymity set so subsequent circuits exit only through relays
+        in the requested country and the session becomes distinguishable
+        from default Tor Browser use.
 
-        Narrows the anonymity set: subsequent circuits will exit only
-        through relays located in the requested country, making the
-        session distinguishable from default Tor Browser use. Callers
-        should pair this with :meth:`tor_new_identity` to actually rotate
-        onto a fresh circuit through the requested exit. ``strict=True``
-        forbids tor from falling back to other countries when no exit is
-        usable; ``False`` lets it relax the constraint under pressure.
+        Callers should pair this with ``tor_new_identity`` to actually
+        rotate onto a fresh circuit through the requested exit.
+        ``strict=True`` forbids tor from falling back to other countries
+        when no exit is usable; ``False`` lets it relax the constraint
+        under pressure.
         """
 
         if not _COUNTRY_RE.fullmatch(country_code):
@@ -95,14 +96,16 @@ class _TorRoutingCapabilityMixin:
     def tor_set_exit_nodes(
         self, nodes: list[str], strict: bool = False
     ) -> dict[str, Any]:
-        """Pin tor's exit selection to a specific set of relays.
+        """Pin tor's exit selection to a specific set of relays, sharply
+        narrowing the anonymity set and making the session distinguishable
+        from default Tor Browser use; a small or stale fingerprint list
+        can also break exit availability entirely.
 
         Accepts entries as 40-hex fingerprints (with or without a leading
         ``$``) or as 1-19 character relay nicknames; any other token
-        raises :class:`ValueError`. Narrows the anonymity set sharply, and
-        a small or stale fingerprint list can break exit-node availability
-        entirely; pair with :meth:`tor_new_identity` to use the new policy.
-        ``strict=True`` forbids tor from relaxing the constraint.
+        raises ``ValueError``. Pair with ``tor_new_identity`` to use the
+        new policy. ``strict=True`` forbids tor from relaxing the
+        constraint.
         """
 
         if not nodes:
