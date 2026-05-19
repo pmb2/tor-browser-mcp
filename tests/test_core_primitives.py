@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, PropertyMock
 
 import pytest
@@ -25,41 +24,12 @@ from torbrowser_driver import (
     TorBrowserDriverError,
 )
 
-
-class _FakeConfig(SimpleNamespace):
-    """Minimal stand-in for :class:`DriverConfig` for unit tests."""
+from tests.conftest import _FakeConfig
 
 
-@pytest.fixture()
-def policy(tmp_path: Path) -> PathPolicy:
-    out = tmp_path / "out"
-    work = tmp_path / "work"
-    work.mkdir()
-    return PathPolicy.from_config(output_dir=out, cwd=work)
-
-
-@pytest.fixture()
-def fake_config(policy: PathPolicy) -> _FakeConfig:
-    return _FakeConfig(path_policy=policy)
-
-
-@pytest.fixture()
-def drv(fake_config: _FakeConfig) -> TorBrowserDriver:
+def test_require_driver_raises_when_not_started(policy: PathPolicy) -> None:
     instance = TorBrowserDriver.__new__(TorBrowserDriver)
-    instance.config = fake_config  # type: ignore[assignment]
-    instance.webdriver = MagicMock(name="webdriver")
-    instance.controller = None
-    instance._closed = False
-    instance._tor_process = None
-    instance._session_dir = None
-    instance._owns_session_dir = False
-    instance._owns_tor_data_dir = False
-    return instance
-
-
-def test_require_driver_raises_when_not_started(fake_config: _FakeConfig) -> None:
-    instance = TorBrowserDriver.__new__(TorBrowserDriver)
-    instance.config = fake_config  # type: ignore[assignment]
+    instance.config = _FakeConfig(path_policy=policy)  # type: ignore[assignment]
     instance.webdriver = None
     with pytest.raises(TorBrowserDriverError, match="context manager"):
         instance.browser_current_url()

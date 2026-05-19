@@ -22,8 +22,9 @@ from torbrowser_driver._proxy_intercept_primitives import (
     _ProxyInterceptCapabilityMixin,
     _decode_body,
 )
-from torbrowser_driver._proxy_intercept_substrate import FlowRecorder
 from torbrowser_driver.exceptions import ProxyInterceptError
+
+from tests.conftest import _StubProxyManager as _StubManager
 
 
 _mitm_tflow = pytest.importorskip("mitmproxy.test.tflow")
@@ -33,48 +34,6 @@ _mitm_io = pytest.importorskip("mitmproxy.io")
 # ---------------------------------------------------------------------------
 # Stand-ins
 # ---------------------------------------------------------------------------
-
-
-class _StubManager:
-    """Stand-in for :class:`ProxyManager` carrying a real ``FlowRecorder``."""
-
-    def __init__(
-        self,
-        *,
-        alive: bool = True,
-        listen_port: int = 9261,
-        max_flows: int = 1000,
-        last_error: Exception | None = None,
-    ) -> None:
-        self._alive = alive
-        self.listen_port = listen_port
-        self.recorder = FlowRecorder(max_flows=max_flows)
-        self._last_error = last_error
-
-    def is_alive(self) -> bool:
-        return self._alive
-
-    def last_error(self):
-        return self._last_error
-
-    @property
-    def flow_buffer(self):
-        return self.recorder.buffer
-
-    @property
-    def next_since(self) -> int:
-        return self.recorder.next_since
-
-    def flow_by_id(self, flow_id: str):
-        return self.recorder.flow_by_id(flow_id)
-
-    def raw_flows_snapshot(self):
-        return self.recorder.raw_flows_snapshot()
-
-    def clear_buffer(self) -> int:
-        count = len(self.recorder.buffer)
-        self.recorder.clear()
-        return count
 
 
 class _StubPathPolicy:

@@ -4,24 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 
 from torbrowser_driver import PathPolicy, TorBrowserDriver
-
-
-class _FakeConfig(SimpleNamespace):
-    pass
-
-
-@pytest.fixture()
-def policy(tmp_path: Path) -> PathPolicy:
-    out = tmp_path / "out"
-    work = tmp_path / "work"
-    work.mkdir()
-    return PathPolicy.from_config(output_dir=out, cwd=work)
 
 
 @pytest.fixture()
@@ -64,18 +50,9 @@ def canned() -> list[dict]:
 
 
 @pytest.fixture()
-def drv(policy: PathPolicy, canned: list[dict]) -> TorBrowserDriver:
-    instance = TorBrowserDriver.__new__(TorBrowserDriver)
-    instance.config = _FakeConfig(path_policy=policy)  # type: ignore[assignment]
-    instance.webdriver = MagicMock(name="webdriver")
-    instance.webdriver.execute_script.return_value = canned
-    instance.controller = None
-    instance._closed = False
-    instance._tor_process = None
-    instance._session_dir = None
-    instance._owns_session_dir = False
-    instance._owns_tor_data_dir = False
-    return instance
+def drv(drv: TorBrowserDriver, canned: list[dict]) -> TorBrowserDriver:
+    drv.webdriver.execute_script.return_value = canned
+    return drv
 
 
 def test_network_requests_returns_all(drv: TorBrowserDriver) -> None:

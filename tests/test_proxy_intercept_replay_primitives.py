@@ -23,11 +23,10 @@ from torbrowser_driver._proxy_intercept_primitives import (
     _ProxyInterceptCapabilityMixin,
     _apply_replay_modifications,
 )
-from torbrowser_driver._proxy_intercept_substrate import (
-    FlowRecorder,
-    ProxyManager,
-)
+from torbrowser_driver._proxy_intercept_substrate import ProxyManager
 from torbrowser_driver.exceptions import ProxyInterceptError
+
+from tests.conftest import _StubProxyManager
 
 
 _mitm_tflow = pytest.importorskip("mitmproxy.test.tflow")
@@ -201,39 +200,33 @@ def test_apply_no_body_preserves_source_content() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _StubManager:
-    def __init__(self, *, alive: bool = True, listen_port: int = 9261,
-                 max_flows: int = 1000) -> None:
-        self._alive = alive
-        self.listen_port = listen_port
-        self.recorder = FlowRecorder(max_flows=max_flows)
+class _StubManager(_StubProxyManager):
+    """Replay-aware extension of the shared stub.
+
+    Adds the ``replay_flow`` surface plus the bookkeeping attributes the
+    replay tests poke at directly (``replay_calls`` to inspect dispatch,
+    ``_replay_return_id`` to fake a custom returned id, ``_replay_raises``
+    to simulate a failed dispatch).
+    """
+
+    def __init__(
+        self,
+        *,
+        alive: bool = True,
+        listen_port: int = 9261,
+        max_flows: int = 1000,
+    ) -> None:
+        super().__init__(
+            alive=alive, listen_port=listen_port, max_flows=max_flows
+        )
         self.replay_calls: list[Any] = []
         self._replay_return_id: str | None = None
         self._replay_raises: Exception | None = None
-
-    def is_alive(self) -> bool:
-        return self._alive
-
-    def last_error(self) -> Exception | None:
-        return None
-
-    @property
-    def flow_buffer(self):
-        return self.recorder.buffer
-
-    @property
-    def next_since(self) -> int:
-        return self.recorder.next_since
-
-    def flow_by_id(self, flow_id: str):
-        return self.recorder.flow_by_id(flow_id)
 
     def replay_flow(self, flow: Any, timeout: float = 30.0) -> str:
         self.replay_calls.append((flow, timeout))
         if self._replay_raises is not None:
             raise self._replay_raises
-        # Default behaviour: insert the replay flow into the recorder
-        # so the mixin can find its `since`.
         self.recorder.response(flow)
         return self._replay_return_id or flow.id
 

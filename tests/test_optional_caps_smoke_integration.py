@@ -14,7 +14,6 @@ existing driver-level smoke (9250/9251) or the MCP wire smoke
 from __future__ import annotations
 
 import base64
-import os
 from pathlib import Path
 from typing import Iterator
 
@@ -62,28 +61,6 @@ def _conf_to_list(value: object) -> list[str]:
     if not text:
         return []
     return [text]
-
-
-@pytest.fixture(scope="module")
-def tbb_root() -> Path:
-    raw = os.environ.get("TBB_ROOT")
-    if not raw:
-        pytest.skip("TBB_ROOT not set")
-    root = Path(raw).expanduser().resolve()
-    if not root.is_dir():
-        pytest.skip(f"TBB_ROOT {root} does not exist")
-    return root
-
-
-@pytest.fixture(scope="module")
-def geckodriver_path() -> Path | None:
-    raw = os.environ.get("GECKODRIVER_PATH")
-    if not raw:
-        return None
-    p = Path(raw).expanduser().resolve()
-    if not p.is_file():
-        pytest.skip(f"GECKODRIVER_PATH {p} does not exist")
-    return p
 
 
 @pytest.fixture(scope="module")

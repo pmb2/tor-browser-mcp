@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import platform
 from pathlib import Path
 
 import pytest
@@ -35,27 +34,11 @@ _NEW_KEYS = {
 }
 
 
-def _fake_tbb_layout(root: Path) -> Path:
-    browser = root / "Browser"
-    browser.mkdir(parents=True)
-    if platform.system() == "Windows":
-        firefox = browser / "firefox.exe"
-        tor = browser / "TorBrowser" / "Tor" / "tor.exe"
-    else:
-        firefox = browser / "firefox"
-        tor = browser / "TorBrowser" / "Tor" / "tor"
-    tor.parent.mkdir(parents=True)
-    firefox.write_bytes(b"")
-    tor.write_bytes(b"")
-    return root
-
-
 @pytest.fixture()
-def base_config(tmp_path: Path) -> DriverConfig:
-    tbb = _fake_tbb_layout(tmp_path / "tbb")
+def base_config(tmp_path: Path, fake_tbb_layout: Path) -> DriverConfig:
     policy = PathPolicy.from_config(output_dir=tmp_path / "out", cwd=tmp_path)
     return DriverConfig(
-        tbb_root=tbb,
+        tbb_root=fake_tbb_layout,
         path_policy=policy,
         socks_port=9259,
         control_port=9260,

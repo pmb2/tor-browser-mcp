@@ -50,28 +50,6 @@ EXPECTED_TOOL_NAMES = {
 }
 
 
-@pytest.fixture(scope="module")
-def tbb_root() -> Path:
-    raw = os.environ.get("TBB_ROOT")
-    if not raw:
-        pytest.skip("TBB_ROOT not set")
-    root = Path(raw).expanduser().resolve()
-    if not root.is_dir():
-        pytest.skip(f"TBB_ROOT {root} does not exist")
-    return root
-
-
-@pytest.fixture(scope="module")
-def geckodriver_path() -> Path:
-    raw = os.environ.get("GECKODRIVER_PATH")
-    if not raw:
-        pytest.skip("GECKODRIVER_PATH not set")
-    p = Path(raw).expanduser().resolve()
-    if not p.is_file():
-        pytest.skip(f"GECKODRIVER_PATH {p} does not exist")
-    return p
-
-
 def _decode_text_payload(result: CallToolResult) -> Any:
     """Pull the first ``TextContent`` block off ``result`` and JSON-decode it.
 
@@ -209,8 +187,10 @@ async def _drive_session(
 
 
 def test_mcp_stdio_wire_path(
-    tbb_root: Path, geckodriver_path: Path, tmp_path: Path
+    tbb_root: Path, geckodriver_path: Path | None, tmp_path: Path
 ) -> None:
+    if geckodriver_path is None:
+        pytest.skip("GECKODRIVER_PATH not set")
     output_dir = tmp_path / "mcp-output"
     output_dir.mkdir(parents=True, exist_ok=True)
 

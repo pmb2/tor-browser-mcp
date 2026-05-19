@@ -2,40 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from selenium.webdriver.common.actions.mouse_button import MouseButton
 
-from torbrowser_driver import PathPolicy, TorBrowserDriver
-
-
-class _FakeConfig(SimpleNamespace):
-    pass
-
-
-@pytest.fixture()
-def policy(tmp_path: Path) -> PathPolicy:
-    out = tmp_path / "out"
-    work = tmp_path / "work"
-    work.mkdir()
-    return PathPolicy.from_config(output_dir=out, cwd=work)
-
-
-@pytest.fixture()
-def drv(policy: PathPolicy) -> TorBrowserDriver:
-    instance = TorBrowserDriver.__new__(TorBrowserDriver)
-    instance.config = _FakeConfig(path_policy=policy)  # type: ignore[assignment]
-    instance.webdriver = MagicMock(name="webdriver")
-    instance.controller = None
-    instance._closed = False
-    instance._tor_process = None
-    instance._session_dir = None
-    instance._owns_session_dir = False
-    instance._owns_tor_data_dir = False
-    return instance
+from torbrowser_driver import TorBrowserDriver
 
 
 def _make_action_chain_mock(monkeypatch, recorder: list[tuple[str, tuple, dict]]):

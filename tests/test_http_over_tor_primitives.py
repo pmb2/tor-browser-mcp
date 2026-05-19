@@ -8,41 +8,21 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
 from torbrowser_driver import PathPolicy, TorBrowserDriver, TorBrowserDriverError
 
-
-class _FakeConfig(SimpleNamespace):
-    pass
+from tests.conftest import _FakeConfig
 
 
 @pytest.fixture()
-def policy(tmp_path: Path) -> PathPolicy:
-    out = tmp_path / "out"
-    work = tmp_path / "work"
-    work.mkdir()
-    return PathPolicy.from_config(output_dir=out, cwd=work)
-
-
-@pytest.fixture()
-def drv(policy: PathPolicy) -> TorBrowserDriver:
-    instance = TorBrowserDriver.__new__(TorBrowserDriver)
-    instance.config = _FakeConfig(
+def drv(drv: TorBrowserDriver, policy: PathPolicy) -> TorBrowserDriver:
+    drv.config = _FakeConfig(  # type: ignore[assignment]
         path_policy=policy, socks_port=9999
-    )  # type: ignore[assignment]
-    instance.webdriver = MagicMock(name="webdriver")
-    instance.controller = None
-    instance._closed = False
-    instance._tor_process = None
-    instance._session_dir = None
-    instance._owns_session_dir = False
-    instance._owns_tor_data_dir = False
-    return instance
+    )
+    return drv
 
 
 class _StubHeaders:

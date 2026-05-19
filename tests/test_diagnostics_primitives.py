@@ -2,42 +2,10 @@
 
 from __future__ import annotations
 
-import platform
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
-
 from torbrowser_driver import DriverConfig, PathPolicy, TorBrowserDriver
-
-
-class _FakeConfig(SimpleNamespace):
-    pass
-
-
-@pytest.fixture()
-def policy(tmp_path: Path) -> PathPolicy:
-    out = tmp_path / "out"
-    work = tmp_path / "work"
-    work.mkdir()
-    return PathPolicy.from_config(
-        output_dir=out, cwd=work, allowed_roots=[work]
-    )
-
-
-@pytest.fixture()
-def drv(policy: PathPolicy) -> TorBrowserDriver:
-    instance = TorBrowserDriver.__new__(TorBrowserDriver)
-    instance.config = _FakeConfig(path_policy=policy)  # type: ignore[assignment]
-    instance.webdriver = MagicMock(name="webdriver")
-    instance.controller = None
-    instance._closed = False
-    instance._tor_process = None
-    instance._session_dir = None
-    instance._owns_session_dir = False
-    instance._owns_tor_data_dir = False
-    return instance
 
 
 def test_console_messages_supported(drv: TorBrowserDriver) -> None:
@@ -76,29 +44,13 @@ def test_console_messages_writes_file(
     assert result["supported"] is True
 
 
-def _make_tbb_layout(root: Path) -> Path:
-    browser = root / "Browser"
-    browser.mkdir(parents=True)
-    if platform.system() == "Windows":
-        firefox = browser / "firefox.exe"
-        tor = browser / "TorBrowser" / "Tor" / "tor.exe"
-    else:
-        firefox = browser / "firefox"
-        tor = browser / "TorBrowser" / "Tor" / "tor"
-    tor.parent.mkdir(parents=True)
-    firefox.write_bytes(b"")
-    tor.write_bytes(b"")
-    return root
-
-
-def test_get_config_snapshot(tmp_path: Path) -> None:
-    tbb = _make_tbb_layout(tmp_path / "tbb")
+def test_get_config_snapshot(tmp_path: Path, fake_tbb_layout: Path) -> None:
     policy = PathPolicy.from_config(
         output_dir=tmp_path / "out",
         cwd=tmp_path,
         allowed_roots=[tmp_path / "extra"],
     )
-    config = DriverConfig(tbb_root=tbb, path_policy=policy, headless=True)
+    config = DriverConfig(tbb_root=fake_tbb_layout, path_policy=policy, headless=True)
 
     instance = TorBrowserDriver.__new__(TorBrowserDriver)
     instance.config = config
@@ -111,7 +63,7 @@ def test_get_config_snapshot(tmp_path: Path) -> None:
     instance._owns_tor_data_dir = False
 
     snap = instance.browser_get_config()
-    assert snap["tbb_root"] == str(tbb)
+    assert snap["tbb_root"] == str(fake_tbb_layout)
     assert snap["headless"] is True
     assert snap["socks_port"] == 9250
     assert snap["control_port"] == 9251

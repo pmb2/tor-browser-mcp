@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import platform
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -12,26 +11,12 @@ from torbrowser_driver import DriverConfig, DriverConfigError, PathPolicy
 from torbrowser_mcp.tool_module import ToolContext, load_tool_module
 
 
-def _fake_tbb(root: Path) -> Path:
-    browser = root / "Browser"
-    browser.mkdir(parents=True)
-    if platform.system() == "Windows":
-        firefox = browser / "firefox.exe"
-        tor = browser / "TorBrowser" / "Tor" / "tor.exe"
-    else:
-        firefox = browser / "firefox"
-        tor = browser / "TorBrowser" / "Tor" / "tor"
-    tor.parent.mkdir(parents=True)
-    firefox.write_bytes(b"")
-    tor.write_bytes(b"")
-    return root
-
-
 @pytest.fixture()
-def context(tmp_path: Path) -> tuple[ToolContext, list[tuple[str, object]]]:
-    fake_tbb = _fake_tbb(tmp_path / "tbb")
+def context(
+    tmp_path: Path, fake_tbb_layout: Path
+) -> tuple[ToolContext, list[tuple[str, object]]]:
     policy = PathPolicy.from_config(output_dir=tmp_path / "out", cwd=tmp_path)
-    config = DriverConfig(tbb_root=fake_tbb, path_policy=policy)
+    config = DriverConfig(tbb_root=fake_tbb_layout, path_policy=policy)
 
     calls: list[tuple[str, object]] = []
 

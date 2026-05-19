@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import platform
 from pathlib import Path
 
 import pytest
@@ -10,37 +9,17 @@ import pytest
 from torbrowser_mcp.cli import build_parser, config_from_args, parse_args
 
 
-def _fake_tbb_layout(root: Path) -> Path:
-    browser = root / "Browser"
-    browser.mkdir(parents=True)
-    if platform.system() == "Windows":
-        firefox = browser / "firefox.exe"
-        tor = browser / "TorBrowser" / "Tor" / "tor.exe"
-    else:
-        firefox = browser / "firefox"
-        tor = browser / "TorBrowser" / "Tor" / "tor"
-    tor.parent.mkdir(parents=True)
-    firefox.write_bytes(b"")
-    tor.write_bytes(b"")
-    return root
-
-
-@pytest.fixture()
-def fake_tbb(tmp_path: Path) -> Path:
-    return _fake_tbb_layout(tmp_path / "tbb")
-
-
 @pytest.fixture()
 def out_dir(tmp_path: Path) -> Path:
     return tmp_path / "out"
 
 
-def test_parser_accepts_full_flag_set(fake_tbb: Path, out_dir: Path, tmp_path: Path) -> None:
+def test_parser_accepts_full_flag_set(fake_tbb_layout: Path, out_dir: Path, tmp_path: Path) -> None:
     extra = tmp_path / "extra"
     extra.mkdir()
     ns = parse_args(
         [
-            "--tbb-root", str(fake_tbb),
+            "--tbb-root", str(fake_tbb_layout),
             "--output-dir", str(out_dir),
             "--allowed-root", str(extra),
             "--caps", "vision,pdf",
@@ -52,7 +31,7 @@ def test_parser_accepts_full_flag_set(fake_tbb: Path, out_dir: Path, tmp_path: P
             "--transport", "stdio",
         ]
     )
-    assert ns.tbb_root == fake_tbb
+    assert ns.tbb_root == fake_tbb_layout
     assert ns.output_dir == out_dir
     assert ns.allowed_roots == [extra]
     assert ns.caps == "vision,pdf"
@@ -62,12 +41,12 @@ def test_parser_accepts_full_flag_set(fake_tbb: Path, out_dir: Path, tmp_path: P
 
 
 def test_tbb_root_from_env(
-    monkeypatch: pytest.MonkeyPatch, fake_tbb: Path, out_dir: Path
+    monkeypatch: pytest.MonkeyPatch, fake_tbb_layout: Path, out_dir: Path
 ) -> None:
-    monkeypatch.setenv("TBB_ROOT", str(fake_tbb))
+    monkeypatch.setenv("TBB_ROOT", str(fake_tbb_layout))
     ns = parse_args(["--output-dir", str(out_dir)])
     config, _ = config_from_args(ns)
-    assert config.tbb_root == fake_tbb.resolve()
+    assert config.tbb_root == fake_tbb_layout.resolve()
 
 
 def test_missing_tbb_root_errors(
@@ -80,10 +59,10 @@ def test_missing_tbb_root_errors(
     assert info.value.code == 2
 
 
-def test_caps_combined_with_defaults(fake_tbb: Path, out_dir: Path) -> None:
+def test_caps_combined_with_defaults(fake_tbb_layout: Path, out_dir: Path) -> None:
     ns = parse_args(
         [
-            "--tbb-root", str(fake_tbb),
+            "--tbb-root", str(fake_tbb_layout),
             "--output-dir", str(out_dir),
             "--caps", "vision,pdf",
         ]
@@ -95,18 +74,18 @@ def test_caps_combined_with_defaults(fake_tbb: Path, out_dir: Path) -> None:
     assert "state" in config.enabled_caps
 
 
-def test_unsafe_flag_adds_cap(fake_tbb: Path, out_dir: Path) -> None:
+def test_unsafe_flag_adds_cap(fake_tbb_layout: Path, out_dir: Path) -> None:
     ns = parse_args(
-        ["--tbb-root", str(fake_tbb), "--output-dir", str(out_dir), "--unsafe"]
+        ["--tbb-root", str(fake_tbb_layout), "--output-dir", str(out_dir), "--unsafe"]
     )
     config, _ = config_from_args(ns)
     assert "unsafe" in config.enabled_caps
 
 
-def test_unknown_cap_errors(fake_tbb: Path, out_dir: Path) -> None:
+def test_unknown_cap_errors(fake_tbb_layout: Path, out_dir: Path) -> None:
     ns = parse_args(
         [
-            "--tbb-root", str(fake_tbb),
+            "--tbb-root", str(fake_tbb_layout),
             "--output-dir", str(out_dir),
             "--caps", "nope",
         ]
@@ -116,10 +95,10 @@ def test_unknown_cap_errors(fake_tbb: Path, out_dir: Path) -> None:
     assert info.value.code == 2
 
 
-def test_default_cap_not_acceptable_in_caps(fake_tbb: Path, out_dir: Path) -> None:
+def test_default_cap_not_acceptable_in_caps(fake_tbb_layout: Path, out_dir: Path) -> None:
     ns = parse_args(
         [
-            "--tbb-root", str(fake_tbb),
+            "--tbb-root", str(fake_tbb_layout),
             "--output-dir", str(out_dir),
             "--caps", "core",
         ]
@@ -129,10 +108,10 @@ def test_default_cap_not_acceptable_in_caps(fake_tbb: Path, out_dir: Path) -> No
     assert info.value.code == 2
 
 
-def test_persistent_requires_profile_path(fake_tbb: Path, out_dir: Path) -> None:
+def test_persistent_requires_profile_path(fake_tbb_layout: Path, out_dir: Path) -> None:
     ns = parse_args(
         [
-            "--tbb-root", str(fake_tbb),
+            "--tbb-root", str(fake_tbb_layout),
             "--output-dir", str(out_dir),
             "--profile-mode", "persistent",
         ]
@@ -143,7 +122,7 @@ def test_persistent_requires_profile_path(fake_tbb: Path, out_dir: Path) -> None
 
 
 def test_allowed_root_repeats(
-    fake_tbb: Path, out_dir: Path, tmp_path: Path
+    fake_tbb_layout: Path, out_dir: Path, tmp_path: Path
 ) -> None:
     one = tmp_path / "one"
     two = tmp_path / "two"
@@ -151,7 +130,7 @@ def test_allowed_root_repeats(
     two.mkdir()
     ns = parse_args(
         [
-            "--tbb-root", str(fake_tbb),
+            "--tbb-root", str(fake_tbb_layout),
             "--output-dir", str(out_dir),
             "--allowed-root", str(one),
             "--allowed-root", str(two),
@@ -164,11 +143,11 @@ def test_allowed_root_repeats(
 
 
 def test_allow_unrestricted_file_access_sets_flag(
-    fake_tbb: Path, out_dir: Path
+    fake_tbb_layout: Path, out_dir: Path
 ) -> None:
     ns = parse_args(
         [
-            "--tbb-root", str(fake_tbb),
+            "--tbb-root", str(fake_tbb_layout),
             "--output-dir", str(out_dir),
             "--allow-unrestricted-file-access",
         ]
@@ -177,20 +156,20 @@ def test_allow_unrestricted_file_access_sets_flag(
     assert config.path_policy.unrestricted is True
 
 
-def test_output_dir_is_created(fake_tbb: Path, tmp_path: Path) -> None:
+def test_output_dir_is_created(fake_tbb_layout: Path, tmp_path: Path) -> None:
     nested = tmp_path / "out" / "nested"
-    ns = parse_args(["--tbb-root", str(fake_tbb), "--output-dir", str(nested)])
+    ns = parse_args(["--tbb-root", str(fake_tbb_layout), "--output-dir", str(nested)])
     config, _ = config_from_args(ns)
     assert nested.is_dir()
     assert config.path_policy.output_dir == nested.resolve()
 
 
-def test_tool_module_collected(fake_tbb: Path, out_dir: Path, tmp_path: Path) -> None:
+def test_tool_module_collected(fake_tbb_layout: Path, out_dir: Path, tmp_path: Path) -> None:
     mod = tmp_path / "ext.py"
     mod.write_text("def register(ctx):\n    pass\n", encoding="utf-8")
     ns = parse_args(
         [
-            "--tbb-root", str(fake_tbb),
+            "--tbb-root", str(fake_tbb_layout),
             "--output-dir", str(out_dir),
             "--tool-module", str(mod),
         ]

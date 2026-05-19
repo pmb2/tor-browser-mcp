@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,33 +9,16 @@ from stem import ControllerError, Signal
 
 from torbrowser_driver import PathPolicy, TorBrowserDriver, TorBrowserDriverError
 
-
-class _FakeConfig(SimpleNamespace):
-    pass
+from tests.conftest import _FakeConfig
 
 
 @pytest.fixture()
-def policy(tmp_path: Path) -> PathPolicy:
-    out = tmp_path / "out"
-    work = tmp_path / "work"
-    work.mkdir()
-    return PathPolicy.from_config(output_dir=out, cwd=work)
-
-
-@pytest.fixture()
-def drv(policy: PathPolicy) -> TorBrowserDriver:
-    instance = TorBrowserDriver.__new__(TorBrowserDriver)
-    instance.config = _FakeConfig(  # type: ignore[assignment]
+def drv(drv: TorBrowserDriver, policy: PathPolicy) -> TorBrowserDriver:
+    drv.config = _FakeConfig(  # type: ignore[assignment]
         path_policy=policy, socks_port=9250, control_port=9251
     )
-    instance.webdriver = MagicMock(name="webdriver")
-    instance.controller = MagicMock(name="controller")
-    instance._closed = False
-    instance._tor_process = None
-    instance._session_dir = None
-    instance._owns_session_dir = False
-    instance._owns_tor_data_dir = False
-    return instance
+    drv.controller = MagicMock(name="controller")
+    return drv
 
 
 def test_require_controller_raises_when_missing(policy: PathPolicy) -> None:

@@ -50,28 +50,6 @@ def destructive_caps_allowed() -> None:
         pytest.skip("TBB_ALLOW_DESTRUCTIVE_CAPS=1 not set")
 
 
-@pytest.fixture(scope="module")
-def tbb_root() -> Path:
-    raw = os.environ.get("TBB_ROOT")
-    if not raw:
-        pytest.skip("TBB_ROOT not set")
-    root = Path(raw).expanduser().resolve()
-    if not root.is_dir():
-        pytest.skip(f"TBB_ROOT {root} does not exist")
-    return root
-
-
-@pytest.fixture(scope="module")
-def geckodriver_path() -> Path | None:
-    raw = os.environ.get("GECKODRIVER_PATH")
-    if not raw:
-        return None
-    p = Path(raw).expanduser().resolve()
-    if not p.is_file():
-        pytest.skip(f"GECKODRIVER_PATH {p} does not exist")
-    return p
-
-
 def _build_config(
     tbb_root: Path,
     geckodriver_path: Path | None,
