@@ -6,15 +6,39 @@ No browser fork. No Firefox patch maintenance. No Playwright dependency.
 
 ## Status
 
-Early. The driver substrate and a default-capability MCP server are implemented and pass an integration smoke test against Tor Browser 15.0.13 on Windows. macOS is out of scope for now; Linux is supported by the code but has not been smoke-tested yet.
+Phase 3 close-out. The driver substrate, the default-capability MCP server, and all eight optional capabilities are implemented and exercised by per-capability unit tests plus live integration smokes against Tor Browser 15.0.13.
+
+Optional capabilities, all opt-in: `vision`, `highlight`, `tor-routing`, `unsafe`, `pdf`, `http-over-tor`, `helper-extension`, `proxy-intercept`.
+
+Integration coverage is Windows-validated. Linux is supported by the code but the integration smokes have not been run on it yet. macOS is out of scope.
+
+## Limitations
+
+- **Automation is detectable.** Default WebDriver mode leaves `navigator.webdriver === true`; pages and scripts inside the session can see they are being driven.
+- **Not a stealth tool.** TLS client fingerprint, ALPN settings, and the proxy negotiation pattern distinguish a driven session from default Tor Browser use even before any capability adds further signals.
+- **Not a Playwright drop-in.** No async/await on every call, no auto-waiting beyond the explicit `browser_wait_for_*` primitives, no built-in trace viewer.
+- **The filesystem policy is a guardrail, not a sandbox.** It stops accidental writes outside the configured `output_dir`; it does not contain a malicious actor with shell access to the server process.
+- **Linux integration coverage is pending.** The unit suite passes on Linux but the live-browser smokes have only been run on Windows so far.
+- **macOS is out of scope.**
 
 ## Install
 
-Requires Python 3.10+ and an extracted Tor Browser bundle.
+Requires Python 3.10+ and an extracted Tor Browser bundle. The `proxy-intercept` extra additionally requires Python 3.12+ because of mitmproxy 11's runtime floor.
+
+From a checkout:
 
 ```bash
-pip install -e .[dev]
+pip install -e .
 ```
+
+Once published to PyPI:
+
+```bash
+pip install torbrowser-mcp
+pip install torbrowser-mcp[proxy-intercept]
+```
+
+The package is not yet on PyPI; the lines above are forward-looking.
 
 A compatible `geckodriver` is required. Tor Browser ships one on Linux x86_64 (under `Browser/`); on Windows, download the version matching Tor Browser's Firefox ESR from <https://github.com/mozilla/geckodriver/releases> (TB 15.0.x ships Firefox 140.10.2esr, which works with geckodriver v0.36.0).
 
@@ -28,13 +52,29 @@ torbrowser-mcp \
 
 `--tbb-root` may also come from the `TBB_ROOT` environment variable. Run `torbrowser-mcp --help` for the full flag set, including `--caps`, `--allowed-root`, `--profile-mode`, `--tool-module`, and `--unsafe`.
 
-The server speaks MCP over stdio. Point an MCP client (Claude Desktop, an SDK script, or any stdio client) at the command above.
+The server speaks MCP over stdio. A minimal `claude_desktop_config.json` entry:
+
+```json
+{
+  "mcpServers": {
+    "torbrowser": {
+      "command": "torbrowser-mcp",
+      "args": [
+        "--tbb-root", "C:\\path\\to\\Tor Browser",
+        "--output-dir", "C:\\path\\to\\outputs"
+      ]
+    }
+  }
+}
+```
+
+Any stdio MCP client (Claude Desktop, an SDK script, a custom harness) attaches the same way.
 
 ## Capabilities
 
 Default-enabled (no flag): `core`, `state`, `extract`, `diagnostics`, `tor`, `network-observe`.
 
-Opt-in via `--caps a,b,c`: `vision`, `pdf`, `highlight`, `http-over-tor`, `tor-routing`, `helper-extension`, `proxy-intercept`. `--unsafe` adds the trusted-local `unsafe` capability.
+Opt-in via `--caps a,b,c`: `vision`, `pdf`, `highlight`, `http-over-tor`, `tor-routing`, `helper-extension`, `proxy-intercept`. `--unsafe` adds the trusted-local `unsafe` capability (see below).
 
 The default surface intentionally does not include stealth or anti-detection tooling; pages should expect to observe `navigator.webdriver === true` in default WebDriver mode.
 
@@ -65,11 +105,11 @@ The helper installs an unsigned MV2 extension via chrome-context Marionette and 
 
 ### Coexistence with `proxy-intercept`
 
-When both capabilities are enabled they observe different layers and do not collide: the helper sees and routes requests at the browser layer, while `proxy-intercept` operates on the wire traffic that leaves the browser. A helper-mode mock is invisible to the intercept proxy because the redirect target is the driver-side localhost bridge, which serves the synthesised response without ever leaving the host.
+When both capabilities are enabled they observe different layers and do not collide: the helper sees and routes requests at the browser layer, while `proxy-intercept` operates on the wire traffic that leaves the browser. A helper-mode mock is invisible to the intercept proxy because the redirect target is the driver-side localhost bridge's `/mock/<uuid>` endpoint, which serves the synthesised response over loopback without ever crossing tor.
 
 ## Proxy intercept capability
 
-The `proxy-intercept` capability boots an embedded mitmproxy on a daemon thread chained out through the bundled tor's SOCKS port, installs a per-session MITM CA into the Tor Browser install via `policies.json`, and reconfigures Firefox to use the intercept proxy as its HTTP(S) upstream. Decrypted request and response bodies for HTTP/1.1, HTTP/2, and WebSocket traffic land in a bounded in-memory buffer that the five observation tools listed below read against.
+The `proxy-intercept` capability boots an embedded mitmproxy on a daemon thread chained out through the bundled tor's SOCKS port, installs a per-session MITM CA into the Tor Browser install via `policies.json`, and reconfigures Firefox to use the intercept proxy as its HTTP(S) upstream. Decrypted request and response bodies for HTTP/1.1, HTTP/2, and WebSocket traffic land in a bounded in-memory buffer that the six observation tools listed below read against.
 
 ### Why it is opt-in
 
@@ -79,7 +119,7 @@ Enabling this capability changes what Tor Browser looks like on the wire and dis
 - **The local intercept proxy sees every page's plaintext.** Decrypted bodies live in memory in the driver process and are written to disk verbatim when `browser_intercept_save` is called.
 - **A per-session MITM CA is installed into the Tor Browser install directory.** The driver writes (or deep-merges into) `<tbb_root>/Browser/distribution/policies.json` and restores the prior state on teardown. This is destructive in the sense that it mutates the on-disk Tor Browser bundle for the lifetime of the session.
 - **The session is trivially distinguishable from default Tor Browser** via TLS client fingerprint, ALPN/HTTP-2 settings, and the proxy negotiation pattern. This is not a stealth mode; use it for adversary emulation, detection engineering, and protocol reversing against content you control or are authorised to inspect.
-- **Python 3.12+ is required for the optional extra.** `pip install tor-browser-mcp[proxy-intercept]` pulls in `mitmproxy>=11,<13`, which transitively requires `mitmproxy-rs>=0.12`. That wheel ships only `cp312-abi3` builds (Windows x86_64, manylinux x86_64, manylinux aarch64, macOS universal2). The core install stays at Python 3.10+; only this capability raises the floor.
+- **Python 3.12+ is required for the optional extra.** `pip install torbrowser-mcp[proxy-intercept]` pulls in `mitmproxy>=11,<13`, which transitively requires `mitmproxy-rs>=0.12`. That wheel ships only `cp312-abi3` builds (Windows x86_64, manylinux x86_64, manylinux aarch64, macOS universal2). The core install stays at Python 3.10+; only this capability raises the floor.
 
 When the cap is in the enabled set, the MCP server emits the warning above (verbatim) to stderr at `build_server` time so a misconfigured deployment cannot accidentally start the server without the user seeing the trade-off.
 
@@ -102,7 +142,19 @@ When the cap is in the enabled set, the MCP server emits the warning above (verb
 
 ### Coexistence with `helper-extension`
 
-Both capabilities can be enabled together; the helper observes and routes at the browser layer, the intercept proxy operates on wire traffic, so neither hides flows from the other except for helper-mode mock routes that resolve to a `data:` URL (those never leave Firefox and stay invisible to the intercept proxy).
+Both capabilities can be enabled together; the helper observes and routes at the browser layer, the intercept proxy operates on wire traffic, so neither hides flows from the other except for helper-mode mock routes, which redirect to the driver-side localhost bridge's `/mock/<uuid>` endpoint and are served over loopback without crossing tor.
+
+## Unsafe capability
+
+The `unsafe` capability is an opt-in escape hatch for trusted local research workflows. It is enabled via `--unsafe` (or by adding `unsafe` to `--caps`) and adds three RCE-equivalent tools:
+
+| Tool | What it exposes |
+| --- | --- |
+| `browser_chrome_evaluate_unsafe` | Runs arbitrary JavaScript in the Firefox **chrome** (browser-UI) context via Marionette. Chrome-context scripts can read arbitrary preferences, drive the browser UI, and reach into XPCOM. |
+| `browser_run_python_unsafe` | `exec`s arbitrary Python in the running MCP server process, with the driver, the Selenium handle, the stem controller, and the path policy bound as globals. Stdout is captured into the response. |
+| `tor_control_command_unsafe` | Sends a raw control command to the bundled tor, bypassing the `tor_get_info` allowlist. Accepts any verb the controller will honour, including `SETCONF`, `SIGNAL HALT`, and `EXTENDCIRCUIT` variants that can crash or partition tor. |
+
+Each of these is RCE-equivalent in its respective layer: page-trust, host-trust, and tor-trust all collapse to "whatever the MCP client asks for, the server does." Never expose the `unsafe` capability to an untrusted MCP client. It exists so a researcher driving the server locally can poke at the chrome context, prototype a new primitive without restarting the server, or experiment with tor control verbs that the curated surface deliberately omits.
 
 ## Filesystem policy
 
@@ -112,4 +164,4 @@ Tool calls that read or write files are resolved through a path policy: outputs 
 
 - `torbrowser_driver/` - launch recipe, capability registry, and capability-tagged driver primitives.
 - `torbrowser_mcp/` - MCP server that walks the driver's capability registry and exposes each method as a tool.
-- `tests/` - unit tests plus an opt-in integration smoke test (`pytest -m integration`).
+- `tests/` - unit tests plus an opt-in integration smoke suite (`pytest -m integration`); contributor install is `pip install -e .[dev]`.
