@@ -10,11 +10,16 @@ asyncio event loop against an already-built :class:`DriverConfig`, and
 
 from __future__ import annotations
 
+try:
+    from importlib.metadata import PackageNotFoundError, version as _v
+
+    __version__ = _v("torbrowser-mcp")
+except PackageNotFoundError:
+    __version__ = "0.0.0"
+
 from .cli import main
 from .server import ServerOptions, build_server, run_server
 from .tool_module import ToolContext, load_tool_module
-
-__version__ = "0.0.0"
 
 __all__ = [
     "ServerOptions",

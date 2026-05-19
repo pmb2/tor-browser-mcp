@@ -25,7 +25,12 @@ from .exceptions import (
 )
 from .path_policy import PathPolicy
 
-__version__ = "0.0.0"
+try:
+    from importlib.metadata import PackageNotFoundError, version as _v
+
+    __version__ = _v("torbrowser-mcp")
+except PackageNotFoundError:
+    __version__ = "0.0.0"
 
 __all__ = [
     "BrowserLaunchError",

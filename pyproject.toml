@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,16 +7,34 @@ name = "torbrowser-mcp"
 version = "0.0.0"
 description = "MCP server for stock Tor Browser automation via geckodriver and Marionette"
 readme = "README.md"
+license = "MIT"
+authors = [{ name = "Botond Ormandi" }]
 requires-python = ">=3.10"
+keywords = ["tor", "tor-browser", "mcp", "browser-automation", "geckodriver", "marionette"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+    "Topic :: Software Development :: Testing",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+]
 dependencies = [
     "selenium>=4.15",
     "stem>=1.8",
-    "mcp>=1.0",
+    "mcp>=1.0,<2",
     "urllib3[socks]>=2",
 ]
 
 [project.scripts]
 torbrowser-mcp = "torbrowser_mcp.cli:main"
+
+[project.urls]
+Repository = "https://github.com/Boti-Ormandi/tor-browser-mcp"
+Issues = "https://github.com/Boti-Ormandi/tor-browser-mcp/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -45,3 +63,15 @@ testpaths = ["tests"]
 markers = [
     "integration: requires a real Tor Browser binary; opt-in",
 ]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = false
+ignore_missing_imports = true

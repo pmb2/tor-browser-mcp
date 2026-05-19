@@ -30,6 +30,7 @@ from torbrowser_driver import (
     registered_methods,
 )
 
+from . import __version__
 from .schema import tool_description, tool_input_schema
 
 
@@ -286,7 +287,7 @@ async def run_server(config: DriverConfig, options: ServerOptions) -> None:
 
         init_options = InitializationOptions(
             server_name="tor-browser-mcp",
-            server_version="0.0.0",
+            server_version=__version__,
             capabilities=server.get_capabilities(
                 notification_options=NotificationOptions(),
                 experimental_capabilities={},
