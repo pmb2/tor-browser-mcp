@@ -15,6 +15,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, PropertyMock
 
 import pytest
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 
 from torbrowser_driver import (
     BrowserTimeoutError,
@@ -169,6 +171,157 @@ def test_browser_type_send_keys(drv: TorBrowserDriver) -> None:
     assert element.send_keys.call_args_list[0].args == ("hello",)
     assert element.send_keys.call_args_list[-1].args[0].endswith("\ue007")
     assert result == {"typed": "hello", "submit": True}
+
+
+def test_browser_click(
+    drv: TorBrowserDriver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    element = MagicMock()
+    drv.webdriver.find_element.return_value = element
+    chain = MagicMock()
+    monkeypatch.setattr(
+        "torbrowser_driver._core_primitives.ActionChains",
+        MagicMock(return_value=chain),
+    )
+    result = drv.browser_click("#btn")
+    drv.webdriver.find_element.assert_called_once_with(By.CSS_SELECTOR, "#btn")
+    chain.click.assert_called_once_with(element)
+    chain.perform.assert_called_once()
+    assert result == {"clicked": "#btn"}
+
+
+def test_browser_fill_form(drv: TorBrowserDriver) -> None:
+    element = MagicMock()
+    element.tag_name = "input"
+    element.get_attribute.return_value = "text"
+    drv.webdriver.find_element.return_value = element
+    result = drv.browser_fill_form([{"selector": "#q", "value": "abc"}])
+    element.send_keys.assert_called_once_with("abc")
+    assert result == {"filled": ["#q"], "skipped": []}
+
+
+def test_browser_press_key(
+    drv: TorBrowserDriver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chain = MagicMock()
+    chain.send_keys.return_value = chain
+    monkeypatch.setattr(
+        "torbrowser_driver._core_primitives.ActionChains",
+        MagicMock(return_value=chain),
+    )
+    result = drv.browser_press_key("ENTER")
+    chain.send_keys.assert_called_once_with(Keys.ENTER)
+    chain.perform.assert_called_once()
+    assert result == {"pressed": "ENTER"}
+
+
+def test_browser_hover(
+    drv: TorBrowserDriver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    element = MagicMock()
+    drv.webdriver.find_element.return_value = element
+    chain = MagicMock()
+    chain.move_to_element.return_value = chain
+    monkeypatch.setattr(
+        "torbrowser_driver._core_primitives.ActionChains",
+        MagicMock(return_value=chain),
+    )
+    result = drv.browser_hover(".tip")
+    chain.move_to_element.assert_called_once_with(element)
+    chain.perform.assert_called_once()
+    assert result == {"hovered": ".tip"}
+
+
+def test_browser_select_option(
+    drv: TorBrowserDriver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    element = MagicMock()
+    drv.webdriver.find_element.return_value = element
+    select = MagicMock()
+    monkeypatch.setattr(
+        "torbrowser_driver._core_primitives.Select",
+        MagicMock(return_value=select),
+    )
+    result = drv.browser_select_option("select#color", ["red"])
+    select.select_by_value.assert_called_once_with("red")
+    assert result == {"selected": ["red"]}
+
+
+def test_browser_drag(
+    drv: TorBrowserDriver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src, dst = MagicMock(), MagicMock()
+    drv.webdriver.find_element.side_effect = [src, dst]
+    chain = MagicMock()
+    chain.drag_and_drop.return_value = chain
+    monkeypatch.setattr(
+        "torbrowser_driver._core_primitives.ActionChains",
+        MagicMock(return_value=chain),
+    )
+    result = drv.browser_drag("#a", "#b")
+    chain.drag_and_drop.assert_called_once_with(src, dst)
+    chain.perform.assert_called_once()
+    assert result == {"dragged": ["#a", "#b"]}
+
+
+def test_browser_snapshot(drv: TorBrowserDriver) -> None:
+    tree = {
+        "tag": "html", "role": None, "name": None, "text": None,
+        "children": [], "bounds": None,
+    }
+    drv.webdriver.execute_script.return_value = tree
+    result = drv.browser_snapshot()
+    drv.webdriver.execute_script.assert_called_once()
+    assert result == {"snapshot": tree}
+
+
+def test_browser_evaluate_async_uses_async_script(drv: TorBrowserDriver) -> None:
+    drv.webdriver.execute_async_script.return_value = 7
+    result = drv.browser_evaluate_async("cb(7)")
+    drv.webdriver.set_script_timeout.assert_called_once_with(30.0)
+    drv.webdriver.execute_async_script.assert_called_once_with("cb(7)")
+    drv.webdriver.execute_script.assert_not_called()
+    assert result == {"result": 7}
+
+
+def test_browser_tabs_list(drv: TorBrowserDriver) -> None:
+    drv.webdriver.window_handles = ["h1", "h2"]
+    drv.webdriver.current_window_handle = "h1"
+    drv.webdriver.title = "T"
+    drv.webdriver.current_url = "https://x/"
+    result = drv.browser_tabs("list")
+    assert result["current"] == 0
+    assert [tab["handle"] for tab in result["tabs"]] == ["h1", "h2"]
+
+
+def test_browser_frames(drv: TorBrowserDriver) -> None:
+    iframe = MagicMock()
+    iframe.get_attribute.side_effect = (
+        lambda name: {"id": "f1", "name": "main", "src": "x.html"}[name]
+    )
+    drv.webdriver.find_elements.side_effect = [[iframe], []]
+    result = drv.browser_frames()
+    assert result == {
+        "frames": [{"index": 0, "id": "f1", "name": "main", "src": "x.html"}]
+    }
+
+
+def test_browser_frame_select(drv: TorBrowserDriver) -> None:
+    result = drv.browser_frame_select(index=2)
+    drv.webdriver.switch_to.frame.assert_called_once_with(2)
+    assert result == {"selected": 2}
+
+
+def test_browser_frame_parent(drv: TorBrowserDriver) -> None:
+    result = drv.browser_frame_parent()
+    drv.webdriver.switch_to.parent_frame.assert_called_once()
+    assert result == {}
+
+
+def test_browser_frame_default(drv: TorBrowserDriver) -> None:
+    result = drv.browser_frame_default()
+    drv.webdriver.switch_to.default_content.assert_called_once()
+    assert result == {}
 
 
 def test_browser_scroll_reports_position(drv: TorBrowserDriver) -> None:
