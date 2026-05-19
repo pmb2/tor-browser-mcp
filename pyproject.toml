@@ -60,6 +60,8 @@ exclude = ["tests*", "references*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--strict-markers"
+strict_markers = true
 markers = [
     "integration: requires a real Tor Browser binary; opt-in",
 ]
