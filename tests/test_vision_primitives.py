@@ -213,10 +213,33 @@ def test_browser_mouse_wheel_calls_scroll_by_amount(
 ) -> None:
     rec: list[tuple[str, tuple, dict]] = []
     _make_action_chain_mock(monkeypatch, rec)
+    drv.webdriver.get_window_size.return_value = {"width": 800, "height": 600}
 
     result = drv.browser_mouse_wheel(-50, 100)
     assert result == {"delta_x": -50, "delta_y": 100}
     assert ("scroll_by_amount", (-50, 100), {}) in rec
+
+
+def test_browser_mouse_wheel_moves_pointer_before_scrolling(
+    monkeypatch, drv: TorBrowserDriver
+) -> None:
+    """Firefox/geckodriver drops wheel events at viewport (0, 0); the
+    primitive must move the pointer into the document first.
+    """
+
+    rec: list[tuple[str, tuple, dict]] = []
+    _make_action_chain_mock(monkeypatch, rec)
+    drv.webdriver.get_window_size.return_value = {"width": 800, "height": 600}
+
+    drv.browser_mouse_wheel(0, 200)
+    names = [name for name, _, _ in rec]
+    move_idx = names.index("move_to_location")
+    scroll_idx = names.index("scroll_by_amount")
+    assert move_idx < scroll_idx, (
+        f"expected pointer move before scroll, got order {names!r}"
+    )
+    move_call = next(call for call in rec if call[0] == "move_to_location")
+    assert move_call[1] == (400, 300)
 
 
 def test_browser_resize_calls_set_window_size(drv: TorBrowserDriver) -> None:

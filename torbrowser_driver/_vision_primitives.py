@@ -149,11 +149,21 @@ class _VisionCapabilityMixin:
         """Scroll the mouse wheel by ``(delta_x, delta_y)`` pixels.
 
         Positive ``delta_y`` scrolls down; positive ``delta_x`` scrolls
-        right.
+        right. The pointer is moved to the viewport centre first because
+        Firefox/geckodriver only dispatches W3C wheel events when the
+        pointer lies over a hit-target; a freshly-created ``ActionChains``
+        starts at viewport ``(0, 0)`` which Firefox treats as outside the
+        document and silently drops the wheel.
         """
 
         drv = self._require_driver()
-        ActionChains(drv).scroll_by_amount(int(delta_x), int(delta_y)).perform()
+        size = drv.get_window_size()
+        cx = int(size.get("width", 800)) // 2
+        cy = int(size.get("height", 600)) // 2
+        actions = ActionChains(drv)
+        actions.w3c_actions.pointer_action.move_to_location(cx, cy)
+        actions.scroll_by_amount(int(delta_x), int(delta_y))
+        actions.perform()
         return {"delta_x": int(delta_x), "delta_y": int(delta_y)}
 
     @capability("vision")
