@@ -1,58 +1,42 @@
 # tor-browser-mcp
 
-A Model Context Protocol server that drives a stock Tor Browser via geckodriver + Marionette, with [`stem`](https://stem.torproject.org/) for Tor control. Lets MCP clients automate browsing inside Tor Browser while preserving its anonymity properties (RFP, letterboxing, FPI, font/WebGL restrictions).
+> *the first real MCP server for Tor Browser*
 
-No browser fork. No Firefox patch maintenance. No Playwright dependency.
+[![PyPI version](https://img.shields.io/pypi/v/torbrowser-mcp.svg)](https://pypi.org/project/torbrowser-mcp/)
+[![Python versions](https://img.shields.io/pypi/pyversions/torbrowser-mcp.svg)](https://pypi.org/project/torbrowser-mcp/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/Boti-Ormandi/tor-browser-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Boti-Ormandi/tor-browser-mcp/actions/workflows/ci.yml)
 
-## Status
+Drives the stock Tor Browser via geckodriver + Marionette, preserves the anonymity properties pages depend on (RFP, letterboxing, FPI, isolated circuits), and exposes Tor control (NEWNYM, exit pinning, circuit observation), MITM-over-tor, and a full browser-automation surface as MCP tools.
 
-Phase 3 close-out. The driver substrate, the default-capability MCP server, and all eight optional capabilities are implemented and exercised by per-capability unit tests plus live integration smokes against Tor Browser 15.0.13.
+**No browser fork. No Firefox patch maintenance.**
 
-Optional capabilities, all opt-in: `vision`, `highlight`, `tor-routing`, `unsafe`, `pdf`, `http-over-tor`, `helper-extension`, `proxy-intercept`.
+## What you get
 
-Integration coverage is Windows-validated. Linux is supported by the code but the integration smokes have not been run on it yet. macOS is out of scope.
+- **Stock Tor Browser, driven from MCP.** The bundle the Tor Project ships, automated through Marionette. You upgrade on Tor Browser's schedule, not ours.
+- **Anonymity properties preserved by default.** Resist-fingerprinting (RFP), letterboxing, first-party isolation, and per-origin circuit isolation stay on. Driving the browser does not weaken what the browser hardened.
+- **Tor control built in.** `NEWNYM` (new identity), `tor_set_exit_country` / `tor_set_exit_nodes` (exit pinning), live circuit and stream observation via [`stem`](https://stem.torproject.org/).
+- **MITM-over-tor, opt-in.** Decrypted HTTP/1.1, HTTP/2, and WebSocket traffic over a tor-bound mitmproxy, with a captured-flow buffer, save-to-disk, and replay. For adversary emulation and protocol reversing, not stealth.
+- **Capability-gated tool surface.** Six default capability groups for everyday automation; eight opt-in groups for vision, PDF, helper extension, raw chrome-context JS, and more. Servers expose only what you ask for.
 
-## Limitations
+## Requirements
 
-- **Automation is detectable.** Default WebDriver mode leaves `navigator.webdriver === true`; pages and scripts inside the session can see they are being driven.
-- **Not a stealth tool.** TLS client fingerprint, ALPN settings, and the proxy negotiation pattern distinguish a driven session from default Tor Browser use even before any capability adds further signals.
-- **Not a Playwright drop-in.** No async/await on every call, no auto-waiting beyond the explicit `browser_wait_for_*` primitives, no built-in trace viewer.
-- **The filesystem policy is a guardrail, not a sandbox.** It stops accidental writes outside the configured `output_dir`; it does not contain a malicious actor with shell access to the server process.
-- **Linux integration coverage is pending.** The unit suite passes on Linux but the live-browser smokes have only been run on Windows so far.
-- **macOS is out of scope.**
+Python 3.10+, an extracted Tor Browser bundle, and a compatible `geckodriver`. The `proxy-intercept` extra additionally requires Python 3.12+ because of mitmproxy 11's runtime floor.
 
 ## Install
-
-Requires Python 3.10+ and an extracted Tor Browser bundle. The `proxy-intercept` extra additionally requires Python 3.12+ because of mitmproxy 11's runtime floor.
-
-From a checkout:
-
-```bash
-pip install -e .
-```
-
-Once published to PyPI:
 
 ```bash
 pip install torbrowser-mcp
 pip install torbrowser-mcp[proxy-intercept]
 ```
 
-The package is not yet on PyPI; the lines above are forward-looking.
+> **Status:** pre-PyPI. Until the package lands on PyPI, install from a checkout: `pip install -e .` (or `pip install -e .[proxy-intercept]`).
 
-A compatible `geckodriver` is required. Tor Browser ships one on Linux x86_64 (under `Browser/`); on Windows, download the version matching Tor Browser's Firefox ESR from <https://github.com/mozilla/geckodriver/releases> (TB 15.0.x ships Firefox 140.10.2esr, which works with geckodriver v0.36.0).
+Tor Browser ships a compatible `geckodriver` on Linux x86_64 (under `Browser/`); on Windows, download the version matching Tor Browser's Firefox ESR from <https://github.com/mozilla/geckodriver/releases> (TB 15.0.x ships Firefox 140.10.2esr, which works with geckodriver v0.36.0).
 
-## Run
+## Getting started
 
-```bash
-torbrowser-mcp \
-    --tbb-root /path/to/tor-browser \
-    --output-dir ./torbrowser-mcp-output
-```
-
-`--tbb-root` may also come from the `TBB_ROOT` environment variable. Run `torbrowser-mcp --help` for the full flag set, including `--caps`, `--allowed-root`, `--profile-mode`, `--tool-module`, and `--unsafe`.
-
-The server speaks MCP over stdio. A minimal `claude_desktop_config.json` entry:
+Standard MCP `mcpServers` config:
 
 ```json
 {
@@ -60,23 +44,42 @@ The server speaks MCP over stdio. A minimal `claude_desktop_config.json` entry:
     "torbrowser": {
       "command": "torbrowser-mcp",
       "args": [
-        "--tbb-root", "C:\\path\\to\\Tor Browser",
-        "--output-dir", "C:\\path\\to\\outputs"
+        "--tbb-root", "/path/to/tor-browser",
+        "--output-dir", "/path/to/outputs"
       ]
     }
   }
 }
 ```
 
-Any stdio MCP client (Claude Desktop, an SDK script, a custom harness) attaches the same way.
+Any stdio MCP client wires up the same way. `--tbb-root` may also come from the `TBB_ROOT` environment variable.
+
+On Windows, escape the backslashes in the JSON: `"C:\\path\\to\\Tor Browser"`.
+
+Run `torbrowser-mcp --help` for the full flag set, including `--caps`, `--allowed-root`, `--profile-mode`, `--tool-module`, `--socks-port`, `--control-port`, `--headless`, and `--unsafe`.
 
 ## Capabilities
 
-Default-enabled (no flag): `core`, `state`, `extract`, `diagnostics`, `tor`, `network-observe`.
+Tools are organised into capability groups; each group is either enabled by default or opt-in via `--caps`.
 
-Opt-in via `--caps a,b,c`: `vision`, `pdf`, `highlight`, `http-over-tor`, `tor-routing`, `helper-extension`, `proxy-intercept`. `--unsafe` adds the trusted-local `unsafe` capability (see below).
+| Group | Default? | What it adds |
+| --- | --- | --- |
+| `core` | yes | navigate, click, type, fill, scroll, snapshot, wait, screenshot, evaluate, frames, tabs, downloads |
+| `state` | yes | cookies, localStorage, sessionStorage, storage-state save / restore |
+| `extract` | yes | structured text / links / readable / table / form extraction from the live DOM |
+| `diagnostics` | yes | session config, version info, capability listing |
+| `tor` | yes | NEWNYM, circuit and stream observation, entry guards, `GETINFO` allowlist |
+| `network-observe` | yes | passive request log from the page's perf timeline |
+| `vision` | opt-in | coordinate-based mouse and keyboard, viewport screenshots |
+| `pdf` | opt-in | save current page as PDF |
+| `highlight` | opt-in | persistent on-page element highlight overlays |
+| `tor-routing` | opt-in | pin exit country, pin exit nodes |
+| `http-over-tor` | opt-in | pure-fetch GET/HEAD over the bundled tor (no browser navigation) |
+| `helper-extension` | opt-in | per-session MV2 helper extension: network capture, request routing, init scripts |
+| `proxy-intercept` | opt-in | embedded mitmproxy chained out through the bundled tor; HTTP(S) and WebSocket decryption, replay |
+| `unsafe` | opt-in (also `--unsafe`) | RCE-equivalent escape hatches: chrome-context JS, server-process `exec`, raw tor control |
 
-The default surface intentionally does not include stealth or anti-detection tooling; pages should expect to observe `navigator.webdriver === true` in default WebDriver mode.
+Opt-in groups can be combined: `--caps vision,pdf,helper-extension` (comma-separated).
 
 ## Helper extension capability
 
@@ -154,14 +157,39 @@ The `unsafe` capability is an opt-in escape hatch for trusted local research wor
 | `browser_run_python_unsafe` | `exec`s arbitrary Python in the running MCP server process, with the driver, the Selenium handle, the stem controller, and the path policy bound as globals. Stdout is captured into the response. |
 | `tor_control_command_unsafe` | Sends a raw control command to the bundled tor, bypassing the `tor_get_info` allowlist. Accepts any verb the controller will honour, including `SETCONF`, `SIGNAL HALT`, and `EXTENDCIRCUIT` variants that can crash or partition tor. |
 
-Each of these is RCE-equivalent in its respective layer: page-trust, host-trust, and tor-trust all collapse to "whatever the MCP client asks for, the server does." Never expose the `unsafe` capability to an untrusted MCP client. It exists so a researcher driving the server locally can poke at the chrome context, prototype a new primitive without restarting the server, or experiment with tor control verbs that the curated surface deliberately omits.
+Each of these is RCE-equivalent in its respective layer: page-trust, host-trust, and tor-trust all collapse to "whatever the MCP client asks for, the server does." **Never expose the `unsafe` capability to an untrusted MCP client.** It exists so a researcher driving the server locally can poke at the chrome context, prototype a new primitive without restarting the server, or experiment with tor control verbs that the curated surface deliberately omits.
 
 ## Filesystem policy
 
 Tool calls that read or write files are resolved through a path policy: outputs land under `--output-dir`, and reads are restricted to MCP roots, the server cwd, and any `--allowed-root` directories. `--allow-unrestricted-file-access` disables the guardrail. This is a convenience boundary, not a sandbox.
 
+## Limitations
+
+- **Automation is detectable.** Default WebDriver mode leaves `navigator.webdriver === true`; pages and scripts inside the session can see they are being driven.
+- **Not a stealth tool.** TLS client fingerprint, ALPN settings, and the proxy negotiation pattern distinguish a driven session from default Tor Browser use even before any capability adds further signals.
+- **Not a Playwright drop-in.** No async/await on every call, no auto-waiting beyond the explicit `browser_wait_for_*` primitives, no built-in trace viewer.
+- **Linux integration coverage is pending.** The unit suite passes on Linux but the live-browser smokes have only been run on Windows so far.
+- **macOS is out of scope.**
+
 ## Layout
 
 - `torbrowser_driver/` - launch recipe, capability registry, and capability-tagged driver primitives.
 - `torbrowser_mcp/` - MCP server that walks the driver's capability registry and exposes each method as a tool.
-- `tests/` - unit tests plus an opt-in integration smoke suite (`pytest -m integration`); contributor install is `pip install -e .[dev]`.
+- `tests/` - unit tests plus an opt-in integration smoke suite (`pytest -m integration`).
+
+## Contributing
+
+```bash
+git clone https://github.com/Boti-Ormandi/tor-browser-mcp
+cd tor-browser-mcp
+pip install -e .[dev]
+pre-commit install
+pytest                       # unit suite
+pytest -m integration        # live Tor Browser smokes (needs --tbb-root configured)
+```
+
+Issues and pull requests welcome at <https://github.com/Boti-Ormandi/tor-browser-mcp>.
+
+## License
+
+MIT - see [LICENSE](LICENSE).
