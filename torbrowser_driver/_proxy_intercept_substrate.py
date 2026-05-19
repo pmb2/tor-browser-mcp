@@ -52,7 +52,7 @@ class FlowRecorder:
 
     def __init__(self, max_flows: int) -> None:
         if max_flows < 1:
-            raise ValueError("max_flows must be >= 1")
+            raise ProxyInterceptError("max_flows must be >= 1")
         self._buffer: collections.deque[dict] = collections.deque(maxlen=max_flows)
         self._lock = threading.Lock()
         self._next = 0

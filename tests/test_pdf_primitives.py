@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from torbrowser_driver import PathPolicy, TorBrowserDriver
+from torbrowser_driver import PathPolicy, TorBrowserDriver, TorBrowserDriverError
 
 
 class _FakeConfig(SimpleNamespace):
@@ -149,7 +149,7 @@ def test_browser_pdf_save_scale_out_of_range_raises(
 
 def test_browser_pdf_save_empty_payload_raises(drv: TorBrowserDriver) -> None:
     drv.webdriver.print_page.return_value = ""
-    with pytest.raises(RuntimeError, match="no data"):
+    with pytest.raises(TorBrowserDriverError, match="no data"):
         drv.browser_pdf_save()
 
 

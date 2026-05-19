@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, PropertyMock
 import pytest
 
 from torbrowser_driver import (
+    BrowserTimeoutError,
     PathNotAllowed,
     PathPolicy,
     TorBrowserDriver,
@@ -60,7 +61,7 @@ def test_require_driver_raises_when_not_started(fake_config: _FakeConfig) -> Non
     instance = TorBrowserDriver.__new__(TorBrowserDriver)
     instance.config = fake_config  # type: ignore[assignment]
     instance.webdriver = None
-    with pytest.raises(RuntimeError, match="context manager"):
+    with pytest.raises(TorBrowserDriverError, match="context manager"):
         instance.browser_current_url()
 
 
@@ -187,7 +188,7 @@ def test_browser_wait_for_text_times_out(drv: TorBrowserDriver) -> None:
     body = MagicMock()
     body.text = "nothing matches"
     drv.webdriver.find_elements.return_value = [body]
-    with pytest.raises(TimeoutError):
+    with pytest.raises(BrowserTimeoutError):
         drv.browser_wait_for(text="missing", timeout=0.3)
 
 

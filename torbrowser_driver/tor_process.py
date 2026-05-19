@@ -13,7 +13,7 @@ import stem.process
 from stem.control import Controller
 
 from .config import DriverConfig
-from .exceptions import TorBootstrapTimeout
+from .exceptions import DriverConfigError, TorBootstrapTimeout
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ def launch_tor(
 
     tor_data = config.tor_data_dir
     if tor_data is None:
-        raise ValueError(
+        raise DriverConfigError(
             "DriverConfig.tor_data_dir must be set before launch_tor; the "
             "driver context manager allocates a session directory."
         )

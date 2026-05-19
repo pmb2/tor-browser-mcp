@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from torbrowser_driver import PathPolicy, TorBrowserDriver
+from torbrowser_driver import PathPolicy, TorBrowserDriver, TorBrowserDriverError
 
 
 class _FakeConfig(SimpleNamespace):
@@ -136,5 +136,5 @@ def test_tor_control_command_unsafe_requires_controller(policy: PathPolicy) -> N
     instance.config = _FakeConfig(path_policy=policy)  # type: ignore[assignment]
     instance.webdriver = MagicMock()
     instance.controller = None
-    with pytest.raises(RuntimeError, match="controller not started"):
+    with pytest.raises(TorBrowserDriverError, match="controller not started"):
         instance.tor_control_command_unsafe("GETINFO version")

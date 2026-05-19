@@ -16,6 +16,7 @@ from stem import ControllerError, Signal
 from selenium.webdriver.common.by import By
 
 from .capabilities import capability
+from .exceptions import TorBrowserDriverError
 
 if TYPE_CHECKING:
     from selenium import webdriver
@@ -165,7 +166,7 @@ class _TorCapabilityMixin:
     def _require_controller(self) -> "Controller":
         ctrl = getattr(self, "controller", None)
         if ctrl is None:
-            raise RuntimeError(
+            raise TorBrowserDriverError(
                 "controller not started; use TorBrowserDriver as a context manager"
             )
         return ctrl

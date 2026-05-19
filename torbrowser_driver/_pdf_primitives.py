@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 from selenium.webdriver.common.print_page_options import PrintOptions
 
 from .capabilities import capability
+from .exceptions import TorBrowserDriverError
 
 if TYPE_CHECKING:
     from selenium import webdriver
@@ -99,7 +100,7 @@ class _PdfCapabilityMixin:
 
         encoded = drv.print_page(options)
         if not encoded:
-            raise RuntimeError(
+            raise TorBrowserDriverError(
                 "WebDriver.print_page returned no data; the Tor Browser "
                 "build may not expose a working print pipeline"
             )
@@ -107,7 +108,7 @@ class _PdfCapabilityMixin:
         try:
             pdf_bytes = base64.b64decode(encoded, validate=True)
         except (binascii.Error, ValueError) as exc:
-            raise RuntimeError(
+            raise TorBrowserDriverError(
                 f"WebDriver.print_page returned non-base64 data: {exc}"
             ) from exc
 

@@ -389,7 +389,7 @@ class HelperBridge:
         """Bind the HTTP listener and spawn the serve + watchdog threads."""
 
         if self._server is not None:
-            raise RuntimeError("HelperBridge.start() called twice")
+            raise HelperExtensionError("HelperBridge.start() called twice")
         self._server = _Server((self._host, self._port), _Handler, self)
         self._server_thread = threading.Thread(
             target=self._server.serve_forever,

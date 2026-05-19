@@ -27,7 +27,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select, WebDriverWait
 
 from .capabilities import capability
-from .exceptions import PathNotAllowed, TorBrowserDriverError
+from .exceptions import BrowserTimeoutError, PathNotAllowed, TorBrowserDriverError
 
 if TYPE_CHECKING:
     from selenium import webdriver
@@ -174,7 +174,7 @@ class _CoreCapabilityMixin:
     def _require_driver(self) -> "webdriver.Firefox":
         drv = getattr(self, "webdriver", None)
         if drv is None:
-            raise RuntimeError(
+            raise TorBrowserDriverError(
                 "driver not started; use TorBrowserDriver as a context manager"
             )
         return drv
@@ -383,7 +383,7 @@ class _CoreCapabilityMixin:
                     EC.presence_of_element_located((By.CSS_SELECTOR, selector))
                 )
             except Exception as exc:
-                raise TimeoutError(
+                raise BrowserTimeoutError(
                     f"selector {selector!r} did not appear within {timeout}s"
                 ) from exc
             return {"waited": "selector", "elapsed": time.monotonic() - start}
@@ -403,7 +403,7 @@ class _CoreCapabilityMixin:
                 return {"waited": "text_gone", "elapsed": time.monotonic() - start}
             if time.monotonic() >= deadline:
                 mode = "text" if want_present else "text_gone"
-                raise TimeoutError(
+                raise BrowserTimeoutError(
                     f"body text condition ({mode}={needle!r}) not met within {timeout}s"
                 )
             time.sleep(0.25)
@@ -877,7 +877,7 @@ class _CoreCapabilityMixin:
 
         source = self.config.path_policy.resolve_output(name)
         if not source.is_file():
-            raise FileNotFoundError(
+            raise TorBrowserDriverError(
                 f"download {name!r} not found under {self.config.path_policy.output_dir}"
             )
         if filename is None:

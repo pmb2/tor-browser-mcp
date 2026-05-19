@@ -23,6 +23,10 @@ class BrowserLaunchError(TorBrowserDriverError):
     """Geckodriver or Tor Browser failed to start."""
 
 
+class BrowserTimeoutError(TorBrowserDriverError):
+    pass
+
+
 class HelperExtensionError(TorBrowserDriverError):
     """Base class for helper-extension capability failures."""
 

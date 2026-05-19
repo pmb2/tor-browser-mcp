@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 from stem import ControllerError, Signal
 
-from torbrowser_driver import PathPolicy, TorBrowserDriver
+from torbrowser_driver import PathPolicy, TorBrowserDriver, TorBrowserDriverError
 
 
 class _FakeConfig(SimpleNamespace):
@@ -47,7 +47,7 @@ def test_require_controller_raises_when_missing(policy: PathPolicy) -> None:
     )
     instance.webdriver = MagicMock()
     instance.controller = None
-    with pytest.raises(RuntimeError, match="controller not started"):
+    with pytest.raises(TorBrowserDriverError, match="controller not started"):
         instance.tor_new_identity(wait=False)
 
 

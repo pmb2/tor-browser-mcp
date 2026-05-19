@@ -32,6 +32,7 @@ from urllib.parse import urljoin, urlparse
 from urllib3.contrib.socks import SOCKSProxyManager
 
 from .capabilities import capability
+from .exceptions import TorBrowserDriverError
 
 if TYPE_CHECKING:
     from selenium import webdriver
@@ -332,7 +333,7 @@ class _HttpOverTorCapabilityMixin:
             result["redirect_chain"] = redirect_chain
             return result
 
-        raise RuntimeError(
+        raise TorBrowserDriverError(
             f"exceeded {_MAX_REDIRECTS} redirects starting from {url!r}"
         )
 

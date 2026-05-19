@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from torbrowser_driver import PathPolicy, TorBrowserDriver
+from torbrowser_driver import PathPolicy, TorBrowserDriver, TorBrowserDriverError
 
 
 class _FakeConfig(SimpleNamespace):
@@ -215,7 +215,7 @@ def test_max_redirect_limit_raises(drv: TorBrowserDriver) -> None:
     ]
     _patch_manager(drv, hops)
 
-    with pytest.raises(RuntimeError, match="redirects"):
+    with pytest.raises(TorBrowserDriverError, match="redirects"):
         drv.tor_http_request(method="GET", url="https://example.test/0")
 
 

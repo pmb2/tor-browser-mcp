@@ -343,5 +343,5 @@ def test_tls_failed_client_appends_synthetic_entry() -> None:
 
 
 def test_recorder_max_flows_validates() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ProxyInterceptError):
         FlowRecorder(max_flows=0)

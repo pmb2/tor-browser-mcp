@@ -13,6 +13,7 @@ from .config import DriverConfig
 from .driver import TorBrowserDriver
 from .exceptions import (
     BrowserLaunchError,
+    BrowserTimeoutError,
     DriverConfigError,
     HelperBridgeDisconnected,
     HelperBridgeTimeout,
@@ -34,6 +35,7 @@ except PackageNotFoundError:
 
 __all__ = [
     "BrowserLaunchError",
+    "BrowserTimeoutError",
     "DEFAULT_CAPABILITIES",
     "DriverConfig",
     "DriverConfigError",

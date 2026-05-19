@@ -12,6 +12,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from .capabilities import capability
+from .exceptions import TorBrowserDriverError
 
 if TYPE_CHECKING:
     from stem.control import Controller
@@ -52,7 +53,7 @@ class _TorRoutingCapabilityMixin:
     def _require_controller(self) -> "Controller":
         ctrl = getattr(self, "controller", None)
         if ctrl is None:
-            raise RuntimeError(
+            raise TorBrowserDriverError(
                 "controller not started; use TorBrowserDriver as a context manager"
             )
         return ctrl
