@@ -9,8 +9,14 @@ Playwright shape.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
 
+from ._primitive_helpers import (
+    _bounded_inline_json,
+    _limit_items,
+    _write_json_payload,
+)
 from .capabilities import capability
 
 if TYPE_CHECKING:
@@ -26,20 +32,25 @@ class _StateCapabilityMixin:
     """Implements the ``state`` capability surface on :class:`TorBrowserDriver`."""
 
     if TYPE_CHECKING:
-        webdriver: "webdriver.Firefox | None"
-        config: "DriverConfig"
+        webdriver: webdriver.Firefox | None
+        config: DriverConfig
 
-        def _require_driver(self) -> "webdriver.Firefox": ...
+        def _require_driver(self) -> webdriver.Firefox: ...
 
     @capability("state")
     def browser_cookie_list(
-        self, domain: str | None = None, path: str | None = None
+        self,
+        domain: str | None = None,
+        path: str | None = None,
+        limit: int | None = None,
+        filename: str | None = None,
     ) -> dict[str, Any]:
         """List every cookie attached to the current document.
 
         ``domain`` and ``path`` apply exact-string filters on the cookie's
-        ``domain`` and ``path`` fields. Returns ``{"cookies": [...]}`` where
-        each entry is the dict shape returned by ``driver.get_cookies()``.
+        ``domain`` and ``path`` fields. ``limit`` caps returned cookies after
+        filtering. ``filename`` writes the JSON payload under the output dir
+        and returns only artifact metadata.
         """
 
         drv = self._require_driver()
@@ -48,7 +59,17 @@ class _StateCapabilityMixin:
             cookies = [c for c in cookies if c.get("domain") == domain]
         if path is not None:
             cookies = [c for c in cookies if c.get("path") == path]
-        return {"cookies": cookies}
+        total = len(cookies)
+        selected, truncated = _limit_items(cookies, limit)
+        payload = {
+            "cookies": selected,
+            "count": len(selected),
+            "total": total,
+            "truncated": truncated,
+        }
+        if filename is not None:
+            return _write_json_payload(self.config.path_policy, filename, payload)
+        return payload
 
     @capability("state")
     def browser_cookie_get(self, name: str) -> dict[str, Any]:
@@ -68,7 +89,7 @@ class _StateCapabilityMixin:
         expires: int | None = None,
         http_only: bool = False,
         secure: bool = False,
-        same_site: str | None = None,
+        same_site: Literal["Strict", "Lax", "None"] | None = None,
     ) -> dict[str, Any]:
         """Add a cookie to the current document's jar.
 
@@ -115,24 +136,52 @@ class _StateCapabilityMixin:
         return {"cleared": True}
 
     @capability("state")
-    def browser_localstorage_list(self) -> dict[str, Any]:
-        """List every key in ``window.localStorage`` plus the entry count."""
+    def browser_localstorage_list(
+        self,
+        limit: int | None = None,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """List keys in ``window.localStorage`` plus entry counts.
+
+        ``limit`` caps returned keys. ``filename`` writes the JSON payload
+        under the output dir and returns only artifact metadata.
+        """
 
         drv = self._require_driver()
-        keys = drv.execute_script(
-            "return Object.keys(window.localStorage);"
-        ) or []
-        return {"keys": list(keys), "size": len(keys)}
+        keys = list(drv.execute_script("return Object.keys(window.localStorage);") or [])
+        total = len(keys)
+        selected, truncated = _limit_items(keys, limit)
+        payload = {
+            "keys": selected,
+            "size": total,
+            "count": len(selected),
+            "total": total,
+            "truncated": truncated,
+        }
+        if filename is not None:
+            return _write_json_payload(self.config.path_policy, filename, payload)
+        return payload
 
     @capability("state")
-    def browser_localstorage_get(self, key: str) -> dict[str, Any]:
-        """Return the ``localStorage`` value for ``key`` (``None`` if absent)."""
+    def browser_localstorage_get(
+        self,
+        key: str,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """Return the ``localStorage`` value for ``key`` (``None`` if absent).
+
+        ``filename`` writes the JSON payload under the output dir and returns
+        only artifact metadata.
+        """
 
         drv = self._require_driver()
         value = drv.execute_script(
             "return window.localStorage.getItem(arguments[0]);", key
         )
-        return {"key": key, "value": value}
+        payload = {"key": key, "value": value}
+        if filename is not None:
+            return _write_json_payload(self.config.path_policy, filename, payload)
+        return payload
 
     @capability("state")
     def browser_localstorage_set(self, key: str, value: str) -> dict[str, Any]:
@@ -165,24 +214,52 @@ class _StateCapabilityMixin:
         return {"cleared": True}
 
     @capability("state")
-    def browser_sessionstorage_list(self) -> dict[str, Any]:
-        """List every key in ``window.sessionStorage`` plus the entry count."""
+    def browser_sessionstorage_list(
+        self,
+        limit: int | None = None,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """List keys in ``window.sessionStorage`` plus entry counts.
+
+        ``limit`` caps returned keys. ``filename`` writes the JSON payload
+        under the output dir and returns only artifact metadata.
+        """
 
         drv = self._require_driver()
-        keys = drv.execute_script(
-            "return Object.keys(window.sessionStorage);"
-        ) or []
-        return {"keys": list(keys), "size": len(keys)}
+        keys = list(drv.execute_script("return Object.keys(window.sessionStorage);") or [])
+        total = len(keys)
+        selected, truncated = _limit_items(keys, limit)
+        payload = {
+            "keys": selected,
+            "size": total,
+            "count": len(selected),
+            "total": total,
+            "truncated": truncated,
+        }
+        if filename is not None:
+            return _write_json_payload(self.config.path_policy, filename, payload)
+        return payload
 
     @capability("state")
-    def browser_sessionstorage_get(self, key: str) -> dict[str, Any]:
-        """Return the ``sessionStorage`` value for ``key`` (``None`` if absent)."""
+    def browser_sessionstorage_get(
+        self,
+        key: str,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """Return the ``sessionStorage`` value for ``key`` (``None`` if absent).
+
+        ``filename`` writes the JSON payload under the output dir and returns
+        only artifact metadata.
+        """
 
         drv = self._require_driver()
         value = drv.execute_script(
             "return window.sessionStorage.getItem(arguments[0]);", key
         )
-        return {"key": key, "value": value}
+        payload = {"key": key, "value": value}
+        if filename is not None:
+            return _write_json_payload(self.config.path_policy, filename, payload)
+        return payload
 
     @capability("state")
     def browser_sessionstorage_set(self, key: str, value: str) -> dict[str, Any]:
@@ -224,7 +301,8 @@ class _StateCapabilityMixin:
         ``{"cookies": [...], "origins": [{"origin", "local_storage", "session_storage"}]}``.
         When ``filename`` is given, the JSON is written under
         :attr:`PathPolicy.output_dir` and the result reports ``path``/``bytes``
-        instead.
+        instead. Inline results larger than 512 KiB are replaced by a
+        truncation summary; use ``filename`` for large sessions.
         """
 
         drv = self._require_driver()
@@ -260,13 +338,13 @@ class _StateCapabilityMixin:
             data = json.dumps(state, ensure_ascii=False).encode("utf-8")
             path.write_bytes(data)
             return {"path": str(path), "bytes": len(data)}
-        return {"storage_state": state}
+        return _bounded_inline_json("storage_state", state)
 
     @capability("state")
     def browser_set_storage_state(self, filename: str) -> dict[str, Any]:
         """Apply a previously-captured storage state from ``filename``.
 
-        Resolved through :meth:`PathPolicy.resolve_output` (storage-state
+        Resolved through :meth:`PathPolicy.resolve_input` (storage-state
         files are produced by :meth:`browser_storage_state` and therefore
         live under the output directory). Cookies are added via
         ``driver.add_cookie``. Local- and session-storage are only applied
@@ -276,7 +354,11 @@ class _StateCapabilityMixin:
         """
 
         drv = self._require_driver()
-        path = self.config.path_policy.resolve_output(filename)
+        raw_path = Path(filename)
+        input_path = raw_path if raw_path.is_absolute() else (
+            self.config.path_policy.output_dir / raw_path
+        )
+        path = self.config.path_policy.resolve_input(input_path)
         raw = path.read_text(encoding="utf-8")
         state = json.loads(raw)
 

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from torbrowser_driver import TorBrowserDriver
+import json
+from pathlib import Path
+
+from torbrowser_driver import PathPolicy, TorBrowserDriver
 
 
 def test_extract_links_filters_substring(drv: TorBrowserDriver) -> None:
@@ -14,6 +17,31 @@ def test_extract_links_filters_substring(drv: TorBrowserDriver) -> None:
     result = drv.browser_extract_links(url_filter="x.TEST")
     hrefs = [link["href"] for link in result["links"]]
     assert hrefs == ["https://x.test/a", "https://x.test/b"]
+    assert result["count"] == 2
+    assert result["total"] == 2
+    assert result["truncated"] is False
+
+
+def test_extract_links_limit_and_file_output(
+    drv: TorBrowserDriver, policy: PathPolicy
+) -> None:
+    drv.webdriver.execute_script.return_value = [
+        {"href": "https://x.test/a", "text": "A", "title": None, "rel": None},
+        {"href": "https://x.test/b", "text": "B", "title": None, "rel": None},
+    ]
+
+    limited = drv.browser_extract_links(limit=1)
+    assert [link["href"] for link in limited["links"]] == ["https://x.test/a"]
+    assert limited["count"] == 1
+    assert limited["total"] == 2
+    assert limited["truncated"] is True
+
+    written = drv.browser_extract_links(filename="links.json")
+    path = Path(written["path"])
+    assert path == (policy.output_dir / "links.json").resolve()
+    assert "links" not in written
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["total"] == 2
 
 
 def test_extract_forms_passthrough(drv: TorBrowserDriver) -> None:
@@ -70,6 +98,52 @@ def test_extract_metadata_returns_shape(drv: TorBrowserDriver) -> None:
     assert result["meta"][0]["content"] == "d"
 
 
+def test_extract_metadata_limit(drv: TorBrowserDriver) -> None:
+    drv.webdriver.execute_script.return_value = {
+        "title": "T",
+        "lang": "en",
+        "charset": "UTF-8",
+        "canonical": None,
+        "meta": [
+            {"name": "a", "property": None, "content": "1"},
+            {"name": "b", "property": None, "content": "2"},
+            {"name": "c", "property": None, "content": "3"},
+        ],
+    }
+    result = drv.browser_extract_metadata(limit=2)
+    assert [m["name"] for m in result["meta"]] == ["a", "b"]
+    assert result["count"] == 2
+    assert result["total"] == 3
+    assert result["truncated"] is True
+    assert result["title"] == "T"
+
+
+def test_extract_metadata_filename(
+    drv: TorBrowserDriver, policy: PathPolicy
+) -> None:
+    drv.webdriver.execute_script.return_value = {
+        "title": "T",
+        "lang": "en",
+        "charset": "UTF-8",
+        "canonical": None,
+        "meta": [
+            {"name": "a", "property": None, "content": "1"},
+            {"name": "b", "property": None, "content": "2"},
+        ],
+    }
+    written = drv.browser_extract_metadata(filename="meta.json")
+    path = Path(written["path"])
+    assert path == (policy.output_dir / "meta.json").resolve()
+    assert "meta" not in written
+    assert written["count"] == 2
+    assert written["total"] == 2
+    assert written["truncated"] is False
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["title"] == "T"
+    assert [m["name"] for m in payload["meta"]] == ["a", "b"]
+    assert payload["total"] == 2
+
+
 def test_extract_tables_passthrough(drv: TorBrowserDriver) -> None:
     drv.webdriver.execute_script.return_value = [
         {
@@ -90,7 +164,17 @@ def test_find_text_substring(drv: TorBrowserDriver) -> None:
     offsets = [m["offset"] for m in result["matches"]]
     assert offsets == [0, 31]
     assert result["regex"] is False
+    assert result["total"] == 2
     assert "the" in result["matches"][0]["snippet"]
+
+
+def test_find_text_limit(drv: TorBrowserDriver) -> None:
+    drv.webdriver.execute_script.return_value = "x x x"
+    result = drv.browser_find_text("x", limit=2)
+    assert len(result["matches"]) == 2
+    assert result["count"] == 2
+    assert result["total"] == 3
+    assert result["truncated"] is True
 
 
 def test_find_text_regex(drv: TorBrowserDriver) -> None:

@@ -11,8 +11,9 @@ visible to ``performance.*`` is captured (no headers, no bodies).
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
+from ._primitive_helpers import _validate_limit
 from .capabilities import capability
 
 if TYPE_CHECKING:
@@ -53,10 +54,10 @@ class _NetworkObserveCapabilityMixin:
     """Implements the ``network-observe`` capability on :class:`TorBrowserDriver`."""
 
     if TYPE_CHECKING:
-        webdriver: "webdriver.Firefox | None"
-        config: "DriverConfig"
+        webdriver: webdriver.Firefox | None
+        config: DriverConfig
 
-        def _require_driver(self) -> "webdriver.Firefox": ...
+        def _require_driver(self) -> webdriver.Firefox: ...
 
     def _collect_network_entries(self) -> list[dict[str, Any]]:
         drv = self._require_driver()
@@ -67,6 +68,7 @@ class _NetworkObserveCapabilityMixin:
     def browser_network_requests(
         self,
         url_filter: str | None = None,
+        limit: int | None = None,
         filename: str | None = None,
     ) -> dict[str, Any]:
         """List network entries visible to the Performance API.
@@ -74,32 +76,48 @@ class _NetworkObserveCapabilityMixin:
         Each entry carries ``url``, ``initiator_type``, ``request_start``,
         ``response_start``, ``response_end``, ``transfer_size``,
         ``duration``, ``decoded_body_size``, and ``next_hop_protocol``.
-        ``url_filter`` is a substring match against ``url``. Only the
-        static (Performance-API-derived) view is implemented here. When
-        ``filename`` is set, the JSON is written under the output dir.
+        ``url_filter`` is a substring match against ``url``. ``limit`` caps
+        inline entries after filtering. Only the static
+        (Performance-API-derived) view is implemented here. When
+        ``filename`` is set, the JSON is written under the output dir and
+        only artifact metadata is returned inline.
         """
+
+        _validate_limit(limit)
 
         entries = self._collect_network_entries()
         if url_filter is not None:
             entries = [e for e in entries if url_filter in str(e.get("url") or "")]
 
+        total = len(entries)
+        if limit is not None:
+            entries = entries[:limit]
         payload = {
             "requests": entries,
             "count": len(entries),
+            "total": total,
+            "truncated": len(entries) < total,
             "note": _API_NOTE,
         }
         if filename is not None:
             path = self.config.path_policy.resolve_output(filename)
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             path.write_bytes(data)
-            return {"path": str(path), "bytes": len(data), **payload}
+            return {
+                "path": str(path),
+                "bytes": len(data),
+                "count": payload["count"],
+                "total": total,
+                "truncated": payload["truncated"],
+                "note": _API_NOTE,
+            }
         return payload
 
     @capability("network-observe")
     def browser_network_request(
         self,
         index: int,
-        part: str | None = None,
+        part: Literal["headers", "body"] | None = None,
         filename: str | None = None,
     ) -> dict[str, Any]:
         """Return the network entry at ``index`` (re-collected each call).
@@ -143,5 +161,10 @@ class _NetworkObserveCapabilityMixin:
             path = self.config.path_policy.resolve_output(filename)
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             path.write_bytes(data)
-            return {"path": str(path), "bytes": len(data), **payload}
+            return {
+                "path": str(path),
+                "bytes": len(data),
+                "index": index,
+                "part": part,
+            }
         return payload

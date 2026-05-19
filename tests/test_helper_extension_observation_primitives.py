@@ -9,13 +9,15 @@ and per-request envelope assembly logic.
 from __future__ import annotations
 
 import base64
+import json
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from torbrowser_driver import PathPolicy
 from torbrowser_driver._helper_extension_primitives import (
-    _CaptureState,
-    _HelperExtensionCapabilityMixin,
     _apply_body_chunk,
     _apply_body_observed,
     _apply_page_body,
@@ -24,16 +26,17 @@ from torbrowser_driver._helper_extension_primitives import (
     _apply_response_completed,
     _apply_response_error,
     _apply_response_observed,
+    _CaptureState,
     _decode_body,
     _envelope_from_page_body,
     _finalize_capture,
+    _HelperExtensionCapabilityMixin,
     _match_page_body_to_envelope,
     _patterns_overlap,
     _truncate_to_bytes,
     _validate_match_pattern,
 )
 from torbrowser_driver.exceptions import HelperUnavailable
-
 
 # --- mock plumbing ----------------------------------------------------------
 
@@ -138,7 +141,7 @@ def test_patterns_overlap_disjoint_specific() -> None:
 
 
 def test_decode_body_utf8_returns_str() -> None:
-    assert _decode_body("hello world".encode("utf-8")) == "hello world"
+    assert _decode_body(b"hello world") == "hello world"
 
 
 def test_decode_body_non_utf8_returns_base64_envelope() -> None:
@@ -284,6 +287,38 @@ def test_capture_stop_round_trip_returns_entries() -> None:
     methods = [m for m, _ in bridge.calls]
     assert methods == ["capture.start", "capture.stop"]
     assert capture_id not in drv._captures_map()
+
+
+def test_capture_stop_limit_and_file_output(policy: PathPolicy) -> None:
+    bridge = _FakeBridge()
+    drv = _Driver(bridge=bridge)
+    drv.config = SimpleNamespace(path_policy=policy)
+    start = drv.browser_network_capture_start(patterns=["https://example.com/*"])
+    capture_id = start["capture_id"]
+    state = drv._captures_map()[capture_id]
+    for idx in range(2):
+        _apply_request_observed(
+            state,
+            {
+                "request_id": f"r{idx}",
+                "method": "GET",
+                "url": f"https://example.com/{idx}",
+                "started_at": float(idx),
+            },
+        )
+
+    result = drv.browser_network_capture_stop(
+        capture_id, limit=1, filename="capture.json"
+    )
+
+    assert result["count"] == 1
+    assert result["total"] == 2
+    assert result["truncated"] is True
+    assert "entries" not in result
+    written = Path(result["path"])
+    payload = json.loads(written.read_text(encoding="utf-8"))
+    assert len(payload["entries"]) == 1
+    assert payload["total"] == 2
 
 
 # --- page-world body merge -------------------------------------------------

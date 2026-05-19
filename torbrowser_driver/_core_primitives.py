@@ -13,8 +13,7 @@ import base64
 import json
 import os
 import time
-from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from selenium.common.exceptions import (
     NoAlertPresentException,
@@ -26,11 +25,13 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select, WebDriverWait
 
+from ._primitive_helpers import _bounded_inline_json, _validate_limit
 from .capabilities import capability
 from .exceptions import BrowserTimeoutError, PathNotAllowed, TorBrowserDriverError
 
 if TYPE_CHECKING:
     from selenium import webdriver
+    from selenium.webdriver.remote.webelement import WebElement
 
     from .config import DriverConfig
 
@@ -150,6 +151,11 @@ return walk(root, maxDepth);
 """
 
 
+class FormFillField(TypedDict):
+    selector: str
+    value: str | bool
+
+
 _MODIFIER_KEYS = {
     "CTRL": Keys.CONTROL,
     "CONTROL": Keys.CONTROL,
@@ -158,6 +164,7 @@ _MODIFIER_KEYS = {
     "META": Keys.META,
     "COMMAND": Keys.COMMAND,
 }
+ModifierKey = Literal["CTRL", "CONTROL", "SHIFT", "ALT", "META", "COMMAND"]
 
 
 class _CoreCapabilityMixin:
@@ -169,10 +176,10 @@ class _CoreCapabilityMixin:
     """
 
     if TYPE_CHECKING:
-        webdriver: "webdriver.Firefox | None"
-        config: "DriverConfig"
+        webdriver: webdriver.Firefox | None
+        config: DriverConfig
 
-    def _require_driver(self) -> "webdriver.Firefox":
+    def _require_driver(self) -> webdriver.Firefox:
         drv = getattr(self, "webdriver", None)
         if drv is None:
             raise TorBrowserDriverError(
@@ -180,9 +187,15 @@ class _CoreCapabilityMixin:
             )
         return drv
 
-    def _find(self, selector: str):
+    def _find(self, selector: str) -> WebElement:
         drv = self._require_driver()
         return drv.find_element(By.CSS_SELECTOR, selector)
+
+    def _check_navigation_url_allowed(self, url: str) -> None:
+        if url.lower().startswith("file:") and not self.config.path_policy.is_file_url_allowed(
+            url
+        ):
+            raise PathNotAllowed(f"file:// URL not allowed: {url}")
 
     @capability("core")
     def browser_navigate(self, url: str) -> dict[str, Any]:
@@ -195,10 +208,7 @@ class _CoreCapabilityMixin:
         """
 
         drv = self._require_driver()
-        if url.lower().startswith("file:") and not self.config.path_policy.is_file_url_allowed(
-            url
-        ):
-            raise PathNotAllowed(f"file:// URL not allowed: {url}")
+        self._check_navigation_url_allowed(url)
         drv.get(url)
         return {"url": drv.current_url, "title": drv.title}
 
@@ -308,7 +318,7 @@ class _CoreCapabilityMixin:
             data = json.dumps(tree, ensure_ascii=False).encode("utf-8")
             path.write_bytes(data)
             return {"path": str(path), "bytes": len(data)}
-        return {"snapshot": tree}
+        return _bounded_inline_json("snapshot", tree)
 
     @capability("core")
     def browser_take_screenshot(
@@ -393,6 +403,7 @@ class _CoreCapabilityMixin:
 
         deadline = start + timeout
         needle = text if text is not None else text_gone
+        assert needle is not None
         want_present = text is not None
         while True:
             body_text = ""
@@ -416,8 +427,8 @@ class _CoreCapabilityMixin:
         self,
         target: str,
         double: bool = False,
-        button: str = "left",
-        modifiers: list[str] | None = None,
+        button: Literal["left", "right"] = "left",
+        modifiers: list[ModifierKey] | None = None,
     ) -> dict[str, Any]:
         """Click the first element matching ``target``.
 
@@ -481,7 +492,7 @@ class _CoreCapabilityMixin:
         return {"typed": text[:80], "submit": submit}
 
     @capability("core")
-    def browser_fill_form(self, fields: list[dict[str, Any]]) -> dict[str, Any]:
+    def browser_fill_form(self, fields: list[FormFillField]) -> dict[str, Any]:
         """Fill multiple form fields in one call.
 
         Each field is ``{"selector": str, "value": str | bool}``. Text
@@ -693,7 +704,7 @@ class _CoreCapabilityMixin:
             data = json.dumps(result, ensure_ascii=False, default=str).encode("utf-8")
             path.write_bytes(data)
             return {"path": str(path), "bytes": len(data)}
-        return {"result": result}
+        return _bounded_inline_json("result", result)
 
     @capability("core")
     def browser_evaluate_async(
@@ -724,19 +735,21 @@ class _CoreCapabilityMixin:
             data = json.dumps(result, ensure_ascii=False, default=str).encode("utf-8")
             path.write_bytes(data)
             return {"path": str(path), "bytes": len(data)}
-        return {"result": result}
+        return _bounded_inline_json("result", result)
 
     @capability("core")
     def browser_tabs(
         self,
-        action: str,
+        action: Literal["list", "new", "select", "close"],
         index: int | None = None,
         url: str | None = None,
     ) -> dict[str, Any]:
         """Manage tabs (``"list"``, ``"new"``, ``"select"``, ``"close"``).
 
         ``"new"`` opens a fresh tab via ``switch_to.new_window("tab")`` and
-        optionally navigates it. ``"select"`` switches to the handle at
+        optionally navigates it. The ``url`` argument on ``"new"`` is
+        subject to the same ``file://`` path-policy check as
+        :meth:`browser_navigate`. ``"select"`` switches to the handle at
         ``index``. ``"close"`` closes the handle at ``index`` (or the
         current tab when ``index`` is ``None``) and switches focus to a
         remaining tab. The return shape is uniform: a ``tabs`` list of
@@ -747,6 +760,8 @@ class _CoreCapabilityMixin:
         drv = self._require_driver()
 
         if action == "new":
+            if url is not None:
+                self._check_navigation_url_allowed(url)
             drv.switch_to.new_window("tab")
             if url is not None:
                 drv.get(url)
@@ -787,8 +802,13 @@ class _CoreCapabilityMixin:
         return {"tabs": tabs, "current": current}
 
     @capability("core")
-    def browser_frames(self) -> dict[str, Any]:
-        """List ``<iframe>`` and ``<frame>`` elements on the current document."""
+    def browser_frames(self, limit: int | None = None) -> dict[str, Any]:
+        """List ``<iframe>`` and ``<frame>`` elements on the current document.
+
+        ``limit`` caps returned frame entries.
+        """
+
+        _validate_limit(limit)
 
         drv = self._require_driver()
         elements = drv.find_elements(By.TAG_NAME, "iframe") + drv.find_elements(
@@ -804,7 +824,15 @@ class _CoreCapabilityMixin:
                     "src": el.get_attribute("src"),
                 }
             )
-        return {"frames": frames}
+        total = len(frames)
+        if limit is not None:
+            frames = frames[:limit]
+        return {
+            "frames": frames,
+            "count": len(frames),
+            "total": total,
+            "truncated": len(frames) < total,
+        }
 
     @capability("core")
     def browser_frame_select(
@@ -819,7 +847,7 @@ class _CoreCapabilityMixin:
             element = self._find(selector)
             drv.switch_to.frame(element)
             return {"selected": selector}
-        drv.switch_to.frame(int(index))  # type: ignore[arg-type]
+        drv.switch_to.frame(int(index))
         return {"selected": index}
 
     @capability("core")
@@ -839,13 +867,15 @@ class _CoreCapabilityMixin:
         return {}
 
     @capability("core")
-    def browser_downloads_list(self) -> dict[str, Any]:
+    def browser_downloads_list(self, limit: int | None = None) -> dict[str, Any]:
         """List files in the output directory that look like downloads.
 
         Skips Firefox in-progress markers (``*.part``). The output dir
         doubles as Firefox's download destination by way of
-        :func:`_load_bearing_prefs`.
+        :func:`_load_bearing_prefs`. ``limit`` caps returned entries.
         """
+
+        _validate_limit(limit)
 
         out_dir = self.config.path_policy.output_dir
         downloads: list[dict[str, Any]] = []
@@ -861,7 +891,15 @@ class _CoreCapabilityMixin:
                         "mtime": stat.st_mtime,
                     }
                 )
-        return {"downloads": downloads}
+        total = len(downloads)
+        if limit is not None:
+            downloads = downloads[:limit]
+        return {
+            "downloads": downloads,
+            "count": len(downloads),
+            "total": total,
+            "truncated": len(downloads) < total,
+        }
 
     @capability("core")
     def browser_download_save(
@@ -919,8 +957,14 @@ class _CoreCapabilityMixin:
         }
 
     @capability("core")
-    def browser_output_list(self) -> dict[str, Any]:
-        """Recursively list every file under the output directory."""
+    def browser_output_list(self, limit: int | None = None) -> dict[str, Any]:
+        """Recursively list files under the output directory.
+
+        ``limit`` caps the number of returned entries. ``total`` reports
+        how many files matched before the cap.
+        """
+
+        _validate_limit(limit)
 
         out_dir = self.config.path_policy.output_dir
         files: list[dict[str, Any]] = []
@@ -937,7 +981,16 @@ class _CoreCapabilityMixin:
                         "rel": str(entry.relative_to(out_dir).as_posix()),
                     }
                 )
-        return {"output_dir": str(out_dir), "files": files}
+        total = len(files)
+        if limit is not None:
+            files = files[:limit]
+        return {
+            "output_dir": str(out_dir),
+            "files": files,
+            "count": len(files),
+            "total": total,
+            "truncated": len(files) < total,
+        }
 
     @capability("core")
     def browser_output_delete(self, filename: str) -> dict[str, Any]:

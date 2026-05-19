@@ -8,8 +8,9 @@ methods modify browser state.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
+from ._primitive_helpers import _validate_limit
 from .capabilities import capability
 
 if TYPE_CHECKING:
@@ -65,16 +66,17 @@ class _DiagnosticsCapabilityMixin:
     """Implements the ``diagnostics`` capability surface on :class:`TorBrowserDriver`."""
 
     if TYPE_CHECKING:
-        webdriver: "webdriver.Firefox | None"
-        config: "DriverConfig"
+        webdriver: webdriver.Firefox | None
+        config: DriverConfig
 
-        def _require_driver(self) -> "webdriver.Firefox": ...
+        def _require_driver(self) -> webdriver.Firefox: ...
 
     @capability("diagnostics")
     def browser_console_messages(
         self,
-        level: str | None = None,
+        level: Literal["INFO", "WARNING", "SEVERE"] | None = None,
         include_all: bool = False,
+        limit: int | None = None,
         filename: str | None = None,
     ) -> dict[str, Any]:
         """Return browser-log messages when geckodriver exposes them.
@@ -86,8 +88,12 @@ class _DiagnosticsCapabilityMixin:
         available, ``level`` filters to one of ``"INFO"``, ``"WARNING"``,
         ``"SEVERE"``. ``include_all=False`` truncates to the most recent
         100 entries; ``include_all=True`` returns every captured entry.
-        ``filename`` writes the JSON to disk.
+        ``limit`` explicitly caps the most recent entries after filtering.
+        ``filename`` writes the JSON to disk and returns artifact metadata
+        rather than echoing messages inline.
         """
+
+        _validate_limit(limit)
 
         drv = self._require_driver()
 
@@ -102,29 +108,61 @@ class _DiagnosticsCapabilityMixin:
                     "Firefox/geckodriver did not expose browser log; "
                     "helper-extension capability is required for reliable capture"
                 ),
+                "count": 0,
+                "total": 0,
+                "truncated": False,
             }
             if filename is not None:
                 path = self.config.path_policy.resolve_output(filename)
                 data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
                 path.write_bytes(data)
-                return {"path": str(path), "bytes": len(data), **payload}
+                return {
+                    "path": str(path),
+                    "bytes": len(data),
+                    "supported": False,
+                    "note": payload["note"],
+                    "count": 0,
+                    "total": 0,
+                    "truncated": False,
+                }
             return payload
 
         messages = list(raw or [])
         if level is not None:
             wanted = level.upper()
+            allowed_levels = {"INFO", "WARNING", "SEVERE"}
+            if wanted not in allowed_levels:
+                raise ValueError(
+                    f"level must be one of {sorted(allowed_levels)}, got {level!r}"
+                )
             messages = [
                 m for m in messages if str(m.get("level", "")).upper() == wanted
             ]
-        if not include_all and len(messages) > _DEFAULT_CONSOLE_LIMIT:
+        total = len(messages)
+        if limit is not None:
+            messages = messages[-limit:] if limit else []
+        elif not include_all and total > _DEFAULT_CONSOLE_LIMIT:
             messages = messages[-_DEFAULT_CONSOLE_LIMIT:]
 
-        payload = {"messages": messages, "supported": supported}
+        payload = {
+            "messages": messages,
+            "supported": supported,
+            "count": len(messages),
+            "total": total,
+            "truncated": len(messages) < total,
+        }
         if filename is not None:
             path = self.config.path_policy.resolve_output(filename)
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             path.write_bytes(data)
-            return {"path": str(path), "bytes": len(data), **payload}
+            return {
+                "path": str(path),
+                "bytes": len(data),
+                "supported": supported,
+                "count": payload["count"],
+                "total": total,
+                "truncated": payload["truncated"],
+            }
         return payload
 
     @capability("diagnostics")

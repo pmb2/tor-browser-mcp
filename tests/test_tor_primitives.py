@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from stem import ControllerError, Signal
 
+from tests.conftest import _FakeConfig
 from torbrowser_driver import PathPolicy, TorBrowserDriver, TorBrowserDriverError
 
-from tests.conftest import _FakeConfig
 
-
-@pytest.fixture()
+@pytest.fixture
 def drv(drv: TorBrowserDriver, policy: PathPolicy) -> TorBrowserDriver:
     drv.config = _FakeConfig(  # type: ignore[assignment]
         path_policy=policy, socks_port=9250, control_port=9251
@@ -80,6 +81,9 @@ def test_tor_circuit_status_parsing(drv: TorBrowserDriver) -> None:
     drv.controller.get_info.return_value = raw
     result = drv.tor_circuit_status()
     assert len(result["circuits"]) == 2
+    assert result["count"] == 2
+    assert result["total"] == 2
+    assert result["truncated"] is False
     first = result["circuits"][0]
     assert first["id"] == "1"
     assert first["status"] == "BUILT"
@@ -104,12 +108,24 @@ def test_tor_circuit_status_verbose(drv: TorBrowserDriver) -> None:
     assert entry["time_created"] == "2025-01-01"
 
 
+def test_tor_circuit_status_limit(drv: TorBrowserDriver) -> None:
+    drv.controller.get_info.return_value = "1 BUILT\n2 BUILT\n3 BUILT"
+    result = drv.tor_circuit_status(limit=2)
+    assert [c["id"] for c in result["circuits"]] == ["1", "2"]
+    assert result["count"] == 2
+    assert result["total"] == 3
+    assert result["truncated"] is True
+
+
 def test_tor_stream_status_parsing(drv: TorBrowserDriver) -> None:
     drv.controller.get_info.return_value = (
         "12 SUCCEEDED 7 example.test:443\n"
         "13 NEW 0 other.test:80"
     )
     result = drv.tor_stream_status()
+    assert result["count"] == 2
+    assert result["total"] == 2
+    assert result["truncated"] is False
     assert result["streams"][0] == {
         "id": "12",
         "status": "SUCCEEDED",
@@ -125,6 +141,9 @@ def test_tor_entry_guards_parsing(drv: TorBrowserDriver) -> None:
         "$BBBB never-connected"
     )
     result = drv.tor_entry_guards()
+    assert result["count"] == 2
+    assert result["total"] == 2
+    assert result["truncated"] is False
     assert result["guards"][0]["nickname"] == "Alice"
     assert result["guards"][0]["fingerprint"] == "AAAA"
     assert result["guards"][0]["status"] == "up"
@@ -135,7 +154,31 @@ def test_tor_entry_guards_parsing(drv: TorBrowserDriver) -> None:
 def test_tor_get_info_allowlist(drv: TorBrowserDriver) -> None:
     drv.controller.get_info.side_effect = lambda key: f"value-of-{key}"
     result = drv.tor_get_info(["version", "uptime"])
-    assert result == {"info": {"version": "value-of-version", "uptime": "value-of-uptime"}}
+    assert result == {
+        "info": {"version": "value-of-version", "uptime": "value-of-uptime"}
+    }
+
+
+def test_tor_get_info_file_output(
+    drv: TorBrowserDriver, policy: PathPolicy
+) -> None:
+    drv.controller.get_info.side_effect = lambda key: f"value-of-{key}"
+    result = drv.tor_get_info(["version"], filename="tor-info.json")
+    path = Path(result["path"])
+    assert path == (policy.output_dir / "tor-info.json").resolve()
+    assert result["keys"] == ["version"]
+    assert "info" not in result
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "info": {"version": "value-of-version"}
+    }
+
+
+def test_tor_get_info_large_inline_returns_summary(drv: TorBrowserDriver) -> None:
+    drv.controller.get_info.return_value = "x" * 600_000
+    result = drv.tor_get_info(["ns/all"])
+    assert result["truncated"] is True
+    assert result["bytes"] > result["inline_cap"]
+    assert "info" not in result
 
 
 def test_tor_get_info_rejects_unknown_key(drv: TorBrowserDriver) -> None:

@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import binascii
 import itertools
+import json
 import re
 import secrets
 import threading
@@ -24,12 +25,17 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
+from urllib.parse import urlparse
 
+from ._primitive_helpers import _validate_limit
 from .capabilities import capability
 from .exceptions import HelperUnavailable
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from ._helper_extension_bridge import HelperBridge
+    from .config import DriverConfig
 
 
 _DEFAULT_MAX_BODY_BYTES = 5 * 1024 * 1024
@@ -192,10 +198,7 @@ class _RouteEntry:
         ``"mock"`` for echo purposes only.
         """
 
-        if self.mode == "mock":
-            extension_mode = "redirect"
-        else:
-            extension_mode = self.mode
+        extension_mode = "redirect" if self.mode == "mock" else self.mode
         payload: dict[str, Any] = {
             "route_id": self.route_id,
             "pattern": self.pattern,
@@ -446,9 +449,12 @@ def _match_page_body_to_envelope(
         cand_method_norm = (
             cand_method.upper() if isinstance(cand_method, str) and cand_method else None
         )
-        if target_method_norm is not None and cand_method_norm is not None:
-            if target_method_norm != cand_method_norm:
-                continue
+        if (
+            target_method_norm is not None
+            and cand_method_norm is not None
+            and target_method_norm != cand_method_norm
+        ):
+            continue
         return candidate
     return None
 
@@ -581,16 +587,17 @@ class _HelperExtensionCapabilityMixin:
     """
 
     if TYPE_CHECKING:
-        _helper_bridge: "HelperBridge | None"
+        _helper_bridge: HelperBridge | None
         _helper_addon_id: str | None
         _helper_captures: dict[str, _CaptureState]
         _helper_init_scripts: set[str]
         _helper_subscribers_installed: bool
         _helper_routes: dict[str, _RouteEntry]
-        _helper_route_counter: "itertools.count[int]"
+        _helper_route_counter: itertools.count[int]
         _helper_network_state: str
+        config: DriverConfig
 
-    def _helper_bridge_or_raise(self) -> "HelperBridge":
+    def _helper_bridge_or_raise(self) -> HelperBridge:
         bridge = getattr(self, "_helper_bridge", None)
         if bridge is None or not bridge.connected:
             raise HelperUnavailable(
@@ -621,7 +628,7 @@ class _HelperExtensionCapabilityMixin:
             self._helper_routes = routes
         return routes
 
-    def _route_counter(self) -> "itertools.count[int]":
+    def _route_counter(self) -> itertools.count[int]:
         counter = getattr(self, "_helper_route_counter", None)
         if counter is None:
             counter = itertools.count()
@@ -649,10 +656,7 @@ class _HelperExtensionCapabilityMixin:
         what the extension is told to redirect matching requests to.
         """
 
-        if isinstance(body, str):
-            body_bytes = body.encode("utf-8")
-        else:
-            body_bytes = bytes(body)
+        body_bytes = body.encode("utf-8") if isinstance(body, str) else bytes(body)
         headers_out: dict[str, str] = dict(headers or {})
         if content_type and not any(
             k.lower() == "content-type" for k in headers_out
@@ -662,7 +666,7 @@ class _HelperExtensionCapabilityMixin:
         bridge.register_mock(route_id, int(status), headers_out, body_bytes)
         return f"http://{bridge.host}:{bridge.port}/mock/{route_id}"
 
-    def _ensure_event_subscribers(self, bridge: "HelperBridge") -> None:
+    def _ensure_event_subscribers(self, bridge: HelperBridge) -> None:
         if getattr(self, "_helper_subscribers_installed", False):
             return
         bridge.subscribe("request.observed", self._on_request_observed)
@@ -674,7 +678,11 @@ class _HelperExtensionCapabilityMixin:
         bridge.subscribe("body.observed", self._on_body_observed)
         self._helper_subscribers_installed = True
 
-    def _route_event(self, data: dict[str, Any], apply_fn) -> None:
+    def _route_event(
+        self,
+        data: dict[str, Any],
+        apply_fn: Callable[[Any, dict[str, Any]], None],
+    ) -> None:
         capture_id = data.get("capture_id")
         if not isinstance(capture_id, str):
             return
@@ -837,26 +845,36 @@ class _HelperExtensionCapabilityMixin:
         return {"capture_id": capture_id}
 
     @capability("helper-extension")
-    def browser_network_capture_stop(self, capture_id: str) -> dict[str, Any]:
-        """Stop ``capture_id`` and return the assembled per-request envelopes.
+    def browser_network_capture_stop(
+        self,
+        capture_id: str,
+        limit: int | None = None,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """Stop ``capture_id`` and return assembled per-request envelopes.
 
-        Returns ``{"capture_id": str, "entries": list[dict]}``. Each
-        entry carries URL, method, status code, request and response
-        headers, peer IP, error string, started/completed timestamps,
+        Returns ``{"capture_id": str, "entries": list[dict], "count": int,
+        "total": int, "truncated": bool}`` in inline mode. Each entry
+        carries URL, method, status code, request and response headers,
+        peer IP, error string, started/completed timestamps,
         ``response_body``, ``response_body_truncated``, ``source``
         (``"webrequest"`` / ``"merged"`` / ``"page"``), and ``page_id``
-        when the body came from the page-world override. Page-world
-        bodies are merged into the matching webRequest envelope by
+        when the body came from the page-world override. Page-world bodies
+        are merged into the matching webRequest envelope by
         ``(method, url)``; unmatched page-world bodies surface as
-        synthetic ``source="page"`` entries with ``request_id=None``.
-        See :meth:`browser_network_capture_start` for which traffic
-        each source covers.
+        synthetic ``source="page"`` entries with ``request_id=None``. See
+        :meth:`browser_network_capture_start` for which traffic each source
+        covers.
 
-        Raises :class:`ValueError` if ``capture_id`` is unknown. The
-        extension-side listeners are removed before the entries are
-        flushed; late events that arrive after stop are dropped on the
-        floor.
+        ``limit`` caps inline entries after the capture is finalized.
+        ``filename`` writes the JSON payload under the output dir and
+        returns only artifact metadata. Raises :class:`ValueError` if
+        ``capture_id`` is unknown. The extension-side listeners are removed
+        before the entries are flushed; late events that arrive after stop
+        are dropped on the floor.
         """
+
+        _validate_limit(limit)
 
         captures = self._captures_map()
         state = captures.get(capture_id)
@@ -869,7 +887,29 @@ class _HelperExtensionCapabilityMixin:
         finally:
             captures.pop(capture_id, None)
         entries = _finalize_capture(state)
-        return {"capture_id": capture_id, "entries": entries}
+        total = len(entries)
+        if limit is not None:
+            entries = entries[:limit]
+        payload: dict[str, Any] = {
+            "capture_id": capture_id,
+            "entries": entries,
+            "count": len(entries),
+            "total": total,
+            "truncated": len(entries) < total,
+        }
+        if filename is not None:
+            path = self.config.path_policy.resolve_output(filename)
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            path.write_bytes(data)
+            return {
+                "capture_id": capture_id,
+                "path": str(path),
+                "bytes": len(data),
+                "count": payload["count"],
+                "total": total,
+                "truncated": payload["truncated"],
+            }
+        return payload
 
     @capability("helper-extension")
     def browser_add_init_script(self, source: str) -> dict[str, Any]:
@@ -982,6 +1022,12 @@ class _HelperExtensionCapabilityMixin:
         elif mode == "redirect":
             if not isinstance(redirect_url, str) or not redirect_url:
                 raise ValueError("redirect_url must be a non-empty string")
+            redirect_parsed = urlparse(redirect_url)
+            if redirect_parsed.scheme not in ("http", "https") or not redirect_parsed.netloc:
+                raise ValueError(
+                    f"redirect_url {redirect_url!r} must be an absolute"
+                    " http(s) URL with a host"
+                )
 
         bridge = self._helper_bridge_or_raise()
         route_id = uuid.uuid4().hex
@@ -1061,7 +1107,7 @@ class _HelperExtensionCapabilityMixin:
         victim_modes = [routes[rid].mode for rid in victims]
         for rid in victims:
             routes.pop(rid, None)
-        for rid, victim_mode in zip(victims, victim_modes):
+        for rid, victim_mode in zip(victims, victim_modes, strict=True):
             if victim_mode == "mock":
                 bridge.unregister_mock(rid)
         if victims:
@@ -1069,17 +1115,44 @@ class _HelperExtensionCapabilityMixin:
         return {"removed": len(victims)}
 
     @capability("helper-extension")
-    def browser_route_list(self) -> dict[str, Any]:
+    def browser_route_list(
+        self,
+        limit: int | None = None,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
         """Return installed routes in evaluation order.
 
         Routes are sorted by ``priority`` (descending) with insertion
         order as the tiebreaker -- the order the blocking listeners use
-        when picking the first matching rule. Returns ``{"routes":
-        [...]}`` where each entry is the JSON-safe descriptor produced
-        by :meth:`_RouteEntry.echo`.
+        when picking the first matching rule. ``limit`` caps returned
+        routes. ``filename`` writes the JSON payload under the output dir
+        and returns only artifact metadata.
         """
 
-        return {"routes": [entry.echo() for entry in self._ordered_routes()]}
+        _validate_limit(limit)
+
+        routes = [entry.echo() for entry in self._ordered_routes()]
+        total = len(routes)
+        if limit is not None:
+            routes = routes[:limit]
+        payload = {
+            "routes": routes,
+            "count": len(routes),
+            "total": total,
+            "truncated": len(routes) < total,
+        }
+        if filename is not None:
+            path = self.config.path_policy.resolve_output(filename)
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            path.write_bytes(data)
+            return {
+                "path": str(path),
+                "bytes": len(data),
+                "count": payload["count"],
+                "total": total,
+                "truncated": payload["truncated"],
+            }
+        return payload
 
     @capability("helper-extension")
     def browser_network_state_set(

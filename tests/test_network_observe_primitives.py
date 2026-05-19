@@ -10,7 +10,7 @@ import pytest
 from torbrowser_driver import PathPolicy, TorBrowserDriver
 
 
-@pytest.fixture()
+@pytest.fixture
 def canned() -> list[dict]:
     return [
         {
@@ -49,7 +49,7 @@ def canned() -> list[dict]:
     ]
 
 
-@pytest.fixture()
+@pytest.fixture
 def drv(drv: TorBrowserDriver, canned: list[dict]) -> TorBrowserDriver:
     drv.webdriver.execute_script.return_value = canned
     return drv
@@ -58,7 +58,20 @@ def drv(drv: TorBrowserDriver, canned: list[dict]) -> TorBrowserDriver:
 def test_network_requests_returns_all(drv: TorBrowserDriver) -> None:
     result = drv.browser_network_requests()
     assert result["count"] == 3
+    assert result["total"] == 3
+    assert result["truncated"] is False
     assert "performance API only" in result["note"]
+
+
+def test_network_requests_limit(drv: TorBrowserDriver) -> None:
+    result = drv.browser_network_requests(limit=2)
+    assert result["count"] == 2
+    assert result["total"] == 3
+    assert result["truncated"] is True
+    assert [entry["url"] for entry in result["requests"]] == [
+        "https://x.test/",
+        "https://x.test/a.js",
+    ]
 
 
 def test_network_requests_filter(drv: TorBrowserDriver) -> None:
@@ -73,6 +86,7 @@ def test_network_requests_writes_file(
     result = drv.browser_network_requests(filename="net.json")
     written = Path(result["path"])
     assert written == (policy.output_dir / "net.json").resolve()
+    assert "requests" not in result
     payload = json.loads(written.read_text(encoding="utf-8"))
     assert payload["count"] == 3
 
@@ -86,6 +100,18 @@ def test_network_request_part_headers(drv: TorBrowserDriver) -> None:
     result = drv.browser_network_request(0, part="headers")
     assert result["available"] is False
     assert result["entry"]["url"] == "https://x.test/"
+
+
+def test_network_request_writes_file_without_inline_payload(
+    drv: TorBrowserDriver, policy: PathPolicy
+) -> None:
+    result = drv.browser_network_request(1, filename="request.json")
+    written = Path(result["path"])
+    assert written == (policy.output_dir / "request.json").resolve()
+    assert result["index"] == 1
+    assert "url" not in result
+    payload = json.loads(written.read_text(encoding="utf-8"))
+    assert payload["url"] == "https://x.test/a.js"
 
 
 def test_network_request_invalid_part(drv: TorBrowserDriver) -> None:

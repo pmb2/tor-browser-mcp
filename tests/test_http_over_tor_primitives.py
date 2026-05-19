@@ -7,17 +7,17 @@ module performs a real network call.
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from tests.conftest import _FakeConfig
 from torbrowser_driver import PathPolicy, TorBrowserDriver, TorBrowserDriverError
 
-from tests.conftest import _FakeConfig
 
-
-@pytest.fixture()
+@pytest.fixture
 def drv(drv: TorBrowserDriver, policy: PathPolicy) -> TorBrowserDriver:
     drv.config = _FakeConfig(  # type: ignore[assignment]
         path_policy=policy, socks_port=9999
@@ -183,6 +183,16 @@ def test_redirect_to_non_http_scheme_raises(drv: TorBrowserDriver) -> None:
 
     with pytest.raises(ValueError, match="non-http"):
         drv.tor_http_request(method="GET", url="https://example.test/")
+
+
+def test_initial_non_http_url_raises_before_network(drv: TorBrowserDriver) -> None:
+    with pytest.raises(ValueError, match="http"):
+        drv.tor_http_request(method="GET", url="file:///tmp/x")
+
+
+def test_initial_http_url_without_host_raises(drv: TorBrowserDriver) -> None:
+    with pytest.raises(ValueError, match="absolute http"):
+        drv.tor_http_request(method="GET", url="http://")
 
 
 def test_max_redirect_limit_raises(drv: TorBrowserDriver) -> None:
@@ -380,6 +390,8 @@ def test_sequence_rejects_bad_entry(drv: TorBrowserDriver) -> None:
         drv.tor_http_sequence(requests=[{"method": "GET"}])
     with pytest.raises(ValueError, match="dict"):
         drv.tor_http_sequence(requests=["not-a-dict"])  # type: ignore[list-item]
+    with pytest.raises(ValueError, match="http"):
+        drv.tor_http_sequence(requests=[{"url": "file:///tmp/x"}])
 
 
 def test_filename_writes_body_to_disk(
@@ -400,3 +412,27 @@ def test_filename_writes_body_to_disk(
     written = Path(result["path"])
     assert written.read_bytes() == b"hello"
     assert written.parent == policy.output_dir
+    assert "body" not in result
+
+
+def test_sequence_filename_writes_full_json_without_inline_results(
+    drv: TorBrowserDriver, policy: PathPolicy
+) -> None:
+    response = _StubResponse(
+        status=200,
+        headers=[("Content-Type", "text/plain")],
+        body=b"hello",
+    )
+    _patch_manager(drv, [response])
+
+    result = drv.tor_http_sequence(
+        requests=[{"url": "https://example.test/"}],
+        filename="sequence.json",
+    )
+
+    written = Path(result["path"])
+    assert written.parent == policy.output_dir
+    assert result["results_count"] == 1
+    assert "results" not in result
+    payload = json.loads(written.read_text(encoding="utf-8"))
+    assert payload["results"][0]["body"] == "hello"

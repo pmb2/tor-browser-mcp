@@ -9,23 +9,19 @@ real ``HTTPFlow`` objects.
 
 from __future__ import annotations
 
-import io
-import threading
+import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import patch
 
 import pytest
 
+from tests.conftest import _StubProxyManager as _StubManager
 from torbrowser_driver._proxy_intercept_primitives import (
-    _ProxyInterceptCapabilityMixin,
     _decode_body,
+    _ProxyInterceptCapabilityMixin,
 )
 from torbrowser_driver.exceptions import ProxyInterceptError
-
-from tests.conftest import _StubProxyManager as _StubManager
-
 
 _mitm_tflow = pytest.importorskip("mitmproxy.test.tflow")
 _mitm_io = pytest.importorskip("mitmproxy.io")
@@ -305,7 +301,22 @@ def test_flows_limit_caps_and_marks_truncated() -> None:
     drv = _Driver(mgr)
     result = drv.browser_intercept_flows(limit=3)
     assert len(result["flows"]) == 3
+    assert result["count"] == 3
+    assert result["total"] == 10
     assert result["truncated"] is True
+
+
+def test_flows_filename_writes_json_without_inline_flows(tmp_path: Path) -> None:
+    mgr = _StubManager()
+    mgr.recorder.response(_flow_with_text_body("payload"))
+    drv = _Driver(mgr, config=_StubConfig(tmp_path))
+    result = drv.browser_intercept_flows(filename="flows.json")
+    written = Path(result["path"])
+    assert written == (tmp_path / "flows.json").resolve()
+    assert "flows" not in result
+    payload = json.loads(written.read_text(encoding="utf-8"))
+    assert len(payload["flows"]) == 1
+    assert payload["total"] == 1
 
 
 def test_flows_no_filter_match_returns_empty_and_next_since_input() -> None:
@@ -361,6 +372,21 @@ def test_flow_lookup_without_bodies_marks_truncation() -> None:
     )
     assert "body" not in entry["response"]
     assert entry["response"]["response_body_truncated"] is True
+
+
+def test_flow_lookup_filename_writes_json_without_inline_entry(tmp_path: Path) -> None:
+    mgr = _StubManager()
+    flow = _flow_with_text_body("payload")
+    mgr.recorder.response(flow)
+    drv = _Driver(mgr, config=_StubConfig(tmp_path))
+    result = drv.browser_intercept_flow(flow_id=flow.id, filename="flow.json")
+    written = Path(result["path"])
+    assert written == (tmp_path / "flow.json").resolve()
+    assert result["flow_id"] == flow.id
+    assert "response" not in result
+    payload = json.loads(written.read_text(encoding="utf-8"))
+    assert payload["id"] == flow.id
+    assert payload["response"]["body"] == "payload"
 
 
 def test_flow_lookup_unknown_id_raises_value_error() -> None:

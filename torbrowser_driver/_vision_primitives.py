@@ -8,7 +8,7 @@ CSS selector for the target.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.actions.mouse_button import MouseButton
@@ -41,10 +41,10 @@ class _VisionCapabilityMixin:
     """Implements the ``vision`` capability surface on :class:`TorBrowserDriver`."""
 
     if TYPE_CHECKING:
-        webdriver: "webdriver.Firefox | None"
-        config: "DriverConfig"
+        webdriver: webdriver.Firefox | None
+        config: DriverConfig
 
-        def _require_driver(self) -> "webdriver.Firefox": ...
+        def _require_driver(self) -> webdriver.Firefox: ...
 
     @capability("vision")
     def browser_mouse_move_xy(self, x: int, y: int) -> dict[str, Any]:
@@ -61,7 +61,7 @@ class _VisionCapabilityMixin:
         self,
         x: int,
         y: int,
-        button: str = "left",
+        button: Literal["left", "middle", "right"] = "left",
         click_count: int = 1,
         delay: float = 0.0,
     ) -> dict[str, Any]:
@@ -87,7 +87,10 @@ class _VisionCapabilityMixin:
 
     @capability("vision")
     def browser_mouse_down(
-        self, x: int, y: int, button: str = "left"
+        self,
+        x: int,
+        y: int,
+        button: Literal["left", "middle", "right"] = "left",
     ) -> dict[str, Any]:
         """Move to ``(x, y)``, press ``button``, and leave it held."""
 
@@ -101,7 +104,10 @@ class _VisionCapabilityMixin:
 
     @capability("vision")
     def browser_mouse_up(
-        self, x: int, y: int, button: str = "left"
+        self,
+        x: int,
+        y: int,
+        button: Literal["left", "middle", "right"] = "left",
     ) -> dict[str, Any]:
         """Move to ``(x, y)`` and release ``button``."""
 
@@ -120,7 +126,7 @@ class _VisionCapabilityMixin:
         start_y: int,
         end_x: int,
         end_y: int,
-        button: str = "left",
+        button: Literal["left", "middle", "right"] = "left",
     ) -> dict[str, Any]:
         """Press ``button`` at ``(start_x, start_y)``, drag to
         ``(end_x, end_y)``, and release.

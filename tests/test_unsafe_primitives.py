@@ -7,12 +7,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests.conftest import _FakeConfig
 from torbrowser_driver import PathPolicy, TorBrowserDriver, TorBrowserDriverError
 
-from tests.conftest import _FakeConfig
 
-
-@pytest.fixture()
+@pytest.fixture
 def drv(drv: TorBrowserDriver) -> TorBrowserDriver:
     drv.controller = MagicMock(name="controller")
     return drv
@@ -46,15 +45,27 @@ def test_browser_chrome_evaluate_unsafe_writes_filename(
 ) -> None:
     drv.webdriver.execute_script.return_value = {"value": 42}
     result = drv.browser_chrome_evaluate_unsafe("return 42", filename="out.json")
-    assert result["result"] == {"value": 42}
+    assert "result" not in result
     written = Path(result["path"])
     assert written.exists()
     assert written.read_text(encoding="utf-8") == '{"value": 42}'
 
 
+def test_browser_chrome_evaluate_unsafe_large_inline_returns_summary(
+    drv: TorBrowserDriver,
+) -> None:
+    drv.webdriver.execute_script.return_value = "x" * 600_000
+    result = drv.browser_chrome_evaluate_unsafe("return big")
+    assert result["truncated"] is True
+    assert result["bytes"] > result["inline_cap"]
+    assert "result" not in result
+
+
 def test_browser_run_python_unsafe_captures_stdout(drv: TorBrowserDriver) -> None:
     result = drv.browser_run_python_unsafe(code="print('hi')")
     assert result["stdout"] == "hi\n"
+    assert result["stdout_truncated"] is False
+    assert result["globals_truncated"] is False
     g = result["globals"]
     assert "driver" in g
     assert "webdriver" in g
@@ -62,6 +73,18 @@ def test_browser_run_python_unsafe_captures_stdout(drv: TorBrowserDriver) -> Non
     assert "config" in g
     assert "path_policy" in g
     assert "output_dir" in g
+
+
+def test_browser_run_python_unsafe_truncates_large_reflection(
+    drv: TorBrowserDriver,
+) -> None:
+    result = drv.browser_run_python_unsafe(
+        code="print('x' * 300000)\nbig = 'y' * 10000"
+    )
+    assert result["stdout_truncated"] is True
+    assert result["globals_truncated"] is True
+    assert len(result["stdout"].encode("utf-8")) <= 262_144
+    assert len(result["globals"]["big"].encode("utf-8")) <= 8_192
 
 
 def test_browser_run_python_unsafe_sees_defined_names(drv: TorBrowserDriver) -> None:

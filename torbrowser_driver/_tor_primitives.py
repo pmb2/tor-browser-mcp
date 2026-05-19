@@ -8,13 +8,15 @@ is the only ``tor``-capability method that also drives the browser.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from typing import TYPE_CHECKING, Any
 
-from stem import ControllerError, Signal
 from selenium.webdriver.common.by import By
+from stem import ControllerError, Signal
 
+from ._primitive_helpers import _bounded_inline_json, _limit_items
 from .capabilities import capability
 from .exceptions import TorBrowserDriverError
 
@@ -157,13 +159,13 @@ class _TorCapabilityMixin:
     """Implements the ``tor`` capability surface on :class:`TorBrowserDriver`."""
 
     if TYPE_CHECKING:
-        webdriver: "webdriver.Firefox | None"
-        controller: "Controller | None"
-        config: "DriverConfig"
+        webdriver: webdriver.Firefox | None
+        controller: Controller | None
+        config: DriverConfig
 
-        def _require_driver(self) -> "webdriver.Firefox": ...
+        def _require_driver(self) -> webdriver.Firefox: ...
 
-    def _require_controller(self) -> "Controller":
+    def _require_controller(self) -> Controller:
         ctrl = getattr(self, "controller", None)
         if ctrl is None:
             raise TorBrowserDriverError(
@@ -274,7 +276,11 @@ class _TorCapabilityMixin:
         return {"signaled": True, "waited": waited}
 
     @capability("tor")
-    def tor_circuit_status(self, verbose: bool = False) -> dict[str, Any]:
+    def tor_circuit_status(
+        self,
+        verbose: bool = False,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
         """List the active tor circuits and their relay paths; useful for
         confirming a NEWNYM rotation took effect and for inspecting which
         exit a request is leaving through.
@@ -282,7 +288,8 @@ class _TorCapabilityMixin:
         Each circuit carries ``id``, ``status``, and ``path`` (a list of
         ``{fingerprint, nickname}`` hops). When ``verbose`` is true the
         ``build_flags``, ``purpose``, and ``time_created`` fields are
-        included as well. Implemented via stem's GETINFO circuit-status.
+        included as well. ``limit`` caps returned circuits. Implemented via
+        stem's GETINFO circuit-status.
         """
 
         ctrl = self._require_controller()
@@ -297,16 +304,24 @@ class _TorCapabilityMixin:
                 entry.pop("build_flags", None)
                 entry.pop("time_created", None)
             circuits.append(entry)
-        return {"circuits": circuits}
+        total = len(circuits)
+        selected, truncated = _limit_items(circuits, limit)
+        return {
+            "circuits": selected,
+            "count": len(selected),
+            "total": total,
+            "truncated": truncated,
+        }
 
     @capability("tor")
-    def tor_stream_status(self) -> dict[str, Any]:
+    def tor_stream_status(self, limit: int | None = None) -> dict[str, Any]:
         """List the active tor streams and the circuits they are bound to;
         useful for tracing which page request is travelling over which
         circuit.
 
         Each stream carries ``id``, ``status``, ``circuit_id``, and
-        ``target``. Implemented via stem's GETINFO stream-status.
+        ``target``. ``limit`` caps returned streams. Implemented via stem's
+        GETINFO stream-status.
         """
 
         ctrl = self._require_controller()
@@ -316,16 +331,24 @@ class _TorCapabilityMixin:
             for line in raw.splitlines()
             if line.strip()
         ]
-        return {"streams": streams}
+        total = len(streams)
+        selected, truncated = _limit_items(streams, limit)
+        return {
+            "streams": selected,
+            "count": len(selected),
+            "total": total,
+            "truncated": truncated,
+        }
 
     @capability("tor")
-    def tor_entry_guards(self) -> dict[str, Any]:
+    def tor_entry_guards(self, limit: int | None = None) -> dict[str, Any]:
         """List the entry guards tor is using to enter the network; useful
         for inspecting which long-lived first-hop relays the current
         session is bound to.
 
         Each guard is reported as ``{fingerprint, nickname, status}``.
-        Implemented via stem's GETINFO entry-guards.
+        ``limit`` caps returned guards. Implemented via stem's GETINFO
+        entry-guards.
         """
 
         ctrl = self._require_controller()
@@ -335,18 +358,30 @@ class _TorCapabilityMixin:
             for line in raw.splitlines()
             if line.strip()
         ]
-        return {"guards": guards}
+        total = len(guards)
+        selected, truncated = _limit_items(guards, limit)
+        return {
+            "guards": selected,
+            "count": len(selected),
+            "total": total,
+            "truncated": truncated,
+        }
 
     @capability("tor")
-    def tor_get_info(self, keys: list[str]) -> dict[str, Any]:
+    def tor_get_info(
+        self,
+        keys: list[str],
+        filename: str | None = None,
+    ) -> dict[str, Any]:
         """Read one or more allowlisted, read-only tor control values for
         diagnostics (version, uptime, traffic counters, and similar) without
         granting arbitrary control-port access.
 
         ``keys`` must be drawn from a read-only allowlist; any other key
         raises ``ValueError``. The result is ``{"info": {key: value}}``
-        with the controller's raw string reply per key. Implemented via
-        stem's GETINFO.
+        with the controller's raw string reply per key. ``filename`` writes
+        the JSON payload under the output dir and returns artifact metadata.
+        Implemented via stem's GETINFO.
         """
 
         for key in keys:
@@ -359,7 +394,13 @@ class _TorCapabilityMixin:
         info: dict[str, Any] = {}
         for key in keys:
             info[key] = ctrl.get_info(key)
-        return {"info": info}
+        if filename is not None:
+            path = self.config.path_policy.resolve_output(filename)
+            payload = {"info": info}
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            path.write_bytes(data)
+            return {"path": str(path), "bytes": len(data), "keys": list(info)}
+        return _bounded_inline_json("info", info)
 
     def tor_resolve(self, hostname: str, reverse: bool = False) -> dict[str, Any]:
         """Placeholder for tor DNS resolution; not implemented and not

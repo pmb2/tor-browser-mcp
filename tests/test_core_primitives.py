@@ -18,6 +18,7 @@ import pytest
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 
+from tests.conftest import _FakeConfig
 from torbrowser_driver import (
     BrowserTimeoutError,
     PathNotAllowed,
@@ -25,8 +26,6 @@ from torbrowser_driver import (
     TorBrowserDriver,
     TorBrowserDriverError,
 )
-
-from tests.conftest import _FakeConfig
 
 
 def test_require_driver_raises_when_not_started(policy: PathPolicy) -> None:
@@ -271,13 +270,25 @@ def test_browser_drag(
 
 def test_browser_snapshot(drv: TorBrowserDriver) -> None:
     tree = {
-        "tag": "html", "role": None, "name": None, "text": None,
-        "children": [], "bounds": None,
+        "tag": "html",
+        "role": None,
+        "name": None,
+        "text": None,
+        "children": [],
+        "bounds": None,
     }
     drv.webdriver.execute_script.return_value = tree
     result = drv.browser_snapshot()
     drv.webdriver.execute_script.assert_called_once()
     assert result == {"snapshot": tree}
+
+
+def test_browser_snapshot_large_inline_returns_summary(drv: TorBrowserDriver) -> None:
+    drv.webdriver.execute_script.return_value = {"text": "x" * 600_000}
+    result = drv.browser_snapshot()
+    assert result["truncated"] is True
+    assert result["bytes"] > result["inline_cap"]
+    assert "snapshot" not in result
 
 
 def test_browser_evaluate_async_uses_async_script(drv: TorBrowserDriver) -> None:
@@ -299,6 +310,13 @@ def test_browser_tabs_list(drv: TorBrowserDriver) -> None:
     assert [tab["handle"] for tab in result["tabs"]] == ["h1", "h2"]
 
 
+def test_browser_tabs_new_rejects_disallowed_file_url(drv: TorBrowserDriver) -> None:
+    with pytest.raises(PathNotAllowed):
+        drv.browser_tabs("new", url="file:///etc/passwd")
+    drv.webdriver.switch_to.new_window.assert_not_called()
+    drv.webdriver.get.assert_not_called()
+
+
 def test_browser_frames(drv: TorBrowserDriver) -> None:
     iframe = MagicMock()
     iframe.get_attribute.side_effect = (
@@ -307,8 +325,56 @@ def test_browser_frames(drv: TorBrowserDriver) -> None:
     drv.webdriver.find_elements.side_effect = [[iframe], []]
     result = drv.browser_frames()
     assert result == {
-        "frames": [{"index": 0, "id": "f1", "name": "main", "src": "x.html"}]
+        "frames": [{"index": 0, "id": "f1", "name": "main", "src": "x.html"}],
+        "count": 1,
+        "total": 1,
+        "truncated": False,
     }
+
+
+def test_browser_frames_limit(drv: TorBrowserDriver) -> None:
+    first = MagicMock()
+    first.get_attribute.side_effect = (
+        lambda name: {"id": "f1", "name": "one", "src": "1.html"}[name]
+    )
+    second = MagicMock()
+    second.get_attribute.side_effect = (
+        lambda name: {"id": "f2", "name": "two", "src": "2.html"}[name]
+    )
+    drv.webdriver.find_elements.side_effect = [[first, second], []]
+    result = drv.browser_frames(limit=1)
+    assert [frame["id"] for frame in result["frames"]] == ["f1"]
+    assert result["count"] == 1
+    assert result["total"] == 2
+    assert result["truncated"] is True
+
+
+def test_browser_frames_limit_zero_keeps_total(drv: TorBrowserDriver) -> None:
+    first = MagicMock()
+    first.get_attribute.side_effect = (
+        lambda name: {"id": "f1", "name": "one", "src": "1.html"}[name]
+    )
+    drv.webdriver.find_elements.side_effect = [[first], []]
+    result = drv.browser_frames(limit=0)
+    assert result["frames"] == []
+    assert result["count"] == 0
+    assert result["total"] == 1
+    assert result["truncated"] is True
+
+
+def test_browser_frames_rejects_bool_limit(drv: TorBrowserDriver) -> None:
+    with pytest.raises(ValueError, match="limit"):
+        drv.browser_frames(limit=True)  # type: ignore[arg-type]
+
+
+def test_browser_evaluate_async_large_inline_returns_summary(
+    drv: TorBrowserDriver,
+) -> None:
+    drv.webdriver.execute_async_script.return_value = "x" * 600_000
+    result = drv.browser_evaluate_async("cb(big)")
+    assert result["truncated"] is True
+    assert result["bytes"] > result["inline_cap"]
+    assert "result" not in result
 
 
 def test_browser_frame_select(drv: TorBrowserDriver) -> None:
@@ -352,6 +418,14 @@ def test_browser_evaluate_inline_result(drv: TorBrowserDriver) -> None:
     assert result == {"result": 42}
 
 
+def test_browser_evaluate_large_inline_returns_summary(drv: TorBrowserDriver) -> None:
+    drv.webdriver.execute_script.return_value = "x" * 600_000
+    result = drv.browser_evaluate("return big")
+    assert result["truncated"] is True
+    assert result["bytes"] > result["inline_cap"]
+    assert "result" not in result
+
+
 def test_browser_evaluate_to_file(
     drv: TorBrowserDriver, policy: PathPolicy
 ) -> None:
@@ -359,6 +433,7 @@ def test_browser_evaluate_to_file(
     result = drv.browser_evaluate("return {k:1}", filename="eval.json")
     written = Path(result["path"])
     assert written == (policy.output_dir / "eval.json").resolve()
+    assert "result" not in result
     assert json.loads(written.read_text(encoding="utf-8")) == {"k": 1}
 
 
@@ -399,6 +474,21 @@ def test_browser_downloads_list_skips_part_files(
     result = drv.browser_downloads_list()
     names = {entry["name"] for entry in result["downloads"]}
     assert names == {"done.bin"}
+    assert result["count"] == 1
+    assert result["total"] == 1
+    assert result["truncated"] is False
+
+
+def test_browser_downloads_list_limit(
+    drv: TorBrowserDriver, policy: PathPolicy
+) -> None:
+    (policy.output_dir / "a.bin").write_bytes(b"a")
+    (policy.output_dir / "b.bin").write_bytes(b"b")
+    result = drv.browser_downloads_list(limit=1)
+    assert len(result["downloads"]) == 1
+    assert result["count"] == 1
+    assert result["total"] == 2
+    assert result["truncated"] is True
 
 
 def test_browser_download_save_renames(
@@ -459,11 +549,18 @@ def test_browser_dump_page_writes_all_artifacts(
         del drv.webdriver.get_full_page_screenshot_as_png
     drv.webdriver.get_log.side_effect = RuntimeError("not supported")
     drv.webdriver.execute_script.side_effect = [
-        "body text",                                     # innerText for dump
-        {"tag": "html", "role": None, "name": None, "text": None, "children": [], "bounds": None},  # snapshot
-        ["local-a"],                                     # localStorage keys
-        [],                                              # sessionStorage keys
-        [{"url": "https://x.test/", "initiator_type": "navigation"}],  # network entries
+        "body text",
+        {
+            "tag": "html",
+            "role": None,
+            "name": None,
+            "text": None,
+            "children": [],
+            "bounds": None,
+        },
+        ["local-a"],
+        [],
+        [{"url": "https://x.test/", "initiator_type": "navigation"}],
     ]
 
     result = drv.browser_dump_page(prefix="dump-test")

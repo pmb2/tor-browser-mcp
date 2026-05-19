@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
 
 from torbrowser_driver import DriverConfig, PathPolicy, TorBrowserDriver
 
@@ -16,6 +19,9 @@ def test_console_messages_supported(drv: TorBrowserDriver) -> None:
     result = drv.browser_console_messages()
     assert result["supported"] is True
     assert len(result["messages"]) == 2
+    assert result["count"] == 2
+    assert result["total"] == 2
+    assert result["truncated"] is False
 
 
 def test_console_messages_level_filter(drv: TorBrowserDriver) -> None:
@@ -27,21 +33,47 @@ def test_console_messages_level_filter(drv: TorBrowserDriver) -> None:
     assert [m["message"] for m in result["messages"]] == ["b"]
 
 
+def test_console_messages_rejects_unknown_level(drv: TorBrowserDriver) -> None:
+    drv.webdriver.get_log.return_value = [{"level": "INFO", "message": "a"}]
+    with pytest.raises(ValueError, match="level"):
+        drv.browser_console_messages(level="bogus")  # type: ignore[arg-type]
+
+
 def test_console_messages_unsupported_fallback(drv: TorBrowserDriver) -> None:
     drv.webdriver.get_log.side_effect = RuntimeError("not supported")
     result = drv.browser_console_messages()
     assert result["supported"] is False
     assert result["messages"] == []
+    assert result["count"] == 0
     assert "helper-extension" in result["note"]
+
+
+def test_console_messages_limit_returns_recent_entries(drv: TorBrowserDriver) -> None:
+    drv.webdriver.get_log.return_value = [
+        {"level": "INFO", "message": "a"},
+        {"level": "INFO", "message": "b"},
+        {"level": "INFO", "message": "c"},
+    ]
+    result = drv.browser_console_messages(limit=2)
+    assert [m["message"] for m in result["messages"]] == ["b", "c"]
+    assert result["count"] == 2
+    assert result["total"] == 3
+    assert result["truncated"] is True
 
 
 def test_console_messages_writes_file(
     drv: TorBrowserDriver, policy: PathPolicy
 ) -> None:
-    drv.webdriver.get_log.return_value = []
+    drv.webdriver.get_log.return_value = [{"level": "INFO", "message": "a"}]
     result = drv.browser_console_messages(filename="console.json")
-    assert Path(result["path"]) == (policy.output_dir / "console.json").resolve()
+    written = Path(result["path"])
+    assert written == (policy.output_dir / "console.json").resolve()
     assert result["supported"] is True
+    assert result["count"] == 1
+    assert "messages" not in result
+    assert json.loads(written.read_text(encoding="utf-8"))["messages"] == [
+        {"level": "INFO", "message": "a"}
+    ]
 
 
 def test_get_config_snapshot(tmp_path: Path, fake_tbb_layout: Path) -> None:

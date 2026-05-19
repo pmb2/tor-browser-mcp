@@ -14,7 +14,19 @@ import io
 import json
 from typing import TYPE_CHECKING, Any
 
+from ._primitive_helpers import _bounded_inline_json
 from .capabilities import capability
+
+_STDOUT_INLINE_CAP = 262_144
+_GLOBAL_REPR_CAP = 8_192
+
+
+def _truncate_utf8(text: str, cap: int) -> tuple[str, bool]:
+    data = text.encode("utf-8")
+    if len(data) <= cap:
+        return text, False
+    return data[:cap].decode("utf-8", errors="ignore"), True
+
 
 if TYPE_CHECKING:
     from selenium import webdriver
@@ -28,12 +40,12 @@ class _UnsafeCapabilityMixin:
     """Implements the ``unsafe`` capability surface on :class:`TorBrowserDriver`."""
 
     if TYPE_CHECKING:
-        webdriver: "webdriver.Firefox | None"
-        controller: "Controller | None"
-        config: "DriverConfig"
+        webdriver: webdriver.Firefox | None
+        controller: Controller | None
+        config: DriverConfig
 
-        def _require_driver(self) -> "webdriver.Firefox": ...
-        def _require_controller(self) -> "Controller": ...
+        def _require_driver(self) -> webdriver.Firefox: ...
+        def _require_controller(self) -> Controller: ...
 
     @capability("unsafe")
     def browser_chrome_evaluate_unsafe(
@@ -63,8 +75,8 @@ class _UnsafeCapabilityMixin:
             path = self.config.path_policy.resolve_output(filename)
             data = json.dumps(result, ensure_ascii=False, default=str).encode("utf-8")
             path.write_bytes(data)
-            return {"result": result, "path": str(path), "bytes": len(data)}
-        return {"result": result}
+            return {"path": str(path), "bytes": len(data)}
+        return _bounded_inline_json("result", result)
 
     @capability("unsafe")
     def browser_run_python_unsafe(
@@ -93,9 +105,9 @@ class _UnsafeCapabilityMixin:
             path = self.config.path_policy.resolve_input(filename)
             source = path.read_text(encoding="utf-8")
         else:
-            source = code  # type: ignore[assignment]
+            source = code
 
-        path_policy: "PathPolicy" = self.config.path_policy
+        path_policy: PathPolicy = self.config.path_policy
         globals_dict: dict[str, Any] = {
             "__name__": "__tbm_unsafe__",
             "driver": self,
@@ -109,11 +121,23 @@ class _UnsafeCapabilityMixin:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             exec(source, globals_dict)
-        captured = buf.getvalue()
-        reflected = {
-            k: repr(v) for k, v in globals_dict.items() if not k.startswith("_")
+        captured, stdout_truncated = _truncate_utf8(
+            buf.getvalue(), _STDOUT_INLINE_CAP
+        )
+        reflected: dict[str, str] = {}
+        globals_truncated = False
+        for k, v in globals_dict.items():
+            if k.startswith("_"):
+                continue
+            reflected_value, truncated = _truncate_utf8(repr(v), _GLOBAL_REPR_CAP)
+            reflected[k] = reflected_value
+            globals_truncated = globals_truncated or truncated
+        return {
+            "stdout": captured,
+            "stdout_truncated": stdout_truncated,
+            "globals": reflected,
+            "globals_truncated": globals_truncated,
         }
-        return {"stdout": captured, "globals": reflected}
 
     @capability("unsafe")
     def tor_control_command_unsafe(self, command: str) -> dict[str, Any]:

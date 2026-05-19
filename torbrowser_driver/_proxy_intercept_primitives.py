@@ -19,9 +19,11 @@ SOCKS chain. ``browser_intercept_save`` routes its output path through
 from __future__ import annotations
 
 import base64
-from typing import TYPE_CHECKING, Any
+import json
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
+from ._primitive_helpers import _validate_limit
 from .capabilities import capability
 from .exceptions import ProxyInterceptError
 
@@ -34,6 +36,9 @@ _DEFAULT_FLOWS_BODY_LIMIT = 1 * 1024 * 1024
 _DEFAULT_FLOW_BODY_LIMIT = 5 * 1024 * 1024
 _DEFAULT_FLOWS_RESULT_LIMIT = 200
 _DEFAULT_REPLAY_TIMEOUT = 30.0
+
+ProxyHttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+ProxyHttpVersion = Literal["HTTP/1.0", "HTTP/1.1", "HTTP/2.0"]
 
 _ALLOWED_HTTP_METHODS = frozenset(
     {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
@@ -111,9 +116,9 @@ def _apply_replay_modifications(flow: Any, **modifications: Any) -> None:
         if not isinstance(url, str) or not url:
             raise ValueError("url must be a non-empty string")
         parsed = urlparse(url)
-        if not parsed.scheme or not parsed.netloc:
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise ValueError(
-                f"url {url!r} must include both scheme and host"
+                f"url {url!r} must be an absolute http(s) URL with a host"
             )
         flow.request.url = url
 
@@ -173,7 +178,7 @@ def _apply_replay_modifications(flow: Any, **modifications: Any) -> None:
             raise ValueError("body_base64 must be a string")
         try:
             decoded = base64.b64decode(body_base64, validate=True)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ValueError(f"body_base64 is not valid base64: {exc}") from exc
         flow.request.content = decoded
 
@@ -214,7 +219,7 @@ def _safe_content(message: Any) -> bytes | None:
         data = message.get_content(strict=False)
         if data is not None:
             return data
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return getattr(message, "raw_content", None)
 
@@ -289,9 +294,9 @@ class _ProxyInterceptCapabilityMixin:
     """
 
     if TYPE_CHECKING:
-        _proxy_manager: "ProxyManager | None"
+        _proxy_manager: ProxyManager | None
         _proxy_ca_fingerprint: str | None
-        config: "DriverConfig"
+        config: DriverConfig
 
     def _proxy_alive_check(self) -> None:
         mgr = getattr(self, "_proxy_manager", None)
@@ -364,9 +369,10 @@ class _ProxyInterceptCapabilityMixin:
         since: int | None = None,
         host: str | None = None,
         status_code: int | None = None,
-        limit: int = _DEFAULT_FLOWS_RESULT_LIMIT,
+        limit: int | None = _DEFAULT_FLOWS_RESULT_LIMIT,
         include_bodies: bool = False,
         max_body_bytes: int = _DEFAULT_FLOWS_BODY_LIMIT,
+        filename: str | None = None,
     ) -> dict[str, Any]:
         """List recorded flows with optional filtering.
 
@@ -376,8 +382,9 @@ class _ProxyInterceptCapabilityMixin:
         ``request.host``), ``status_code`` (exact match against
         ``response.status_code``; skips flows with no response).
 
-        ``limit`` caps the number of returned entries; ``truncated`` is
-        ``True`` when more entries matched than were returned.
+        ``limit`` caps the number of returned entries; pass ``None`` for
+        no cap. ``truncated`` is ``True`` when more entries matched than
+        were returned.
 
         ``include_bodies=False`` (default) returns each entry without
         bodies but with ``request_body_truncated`` /
@@ -386,14 +393,14 @@ class _ProxyInterceptCapabilityMixin:
         at ``max_body_bytes``; UTF-8-decodable bodies come back as
         ``str``, others as ``{"base64": ...}``.
 
-        Returns ``{"flows": [...], "next_since": int, "truncated": bool}``.
-        ``next_since`` is the largest ``since`` value across the
-        returned entries (or the input ``since`` when no entries
-        matched).
+        Returns ``{"flows": [...], "next_since": int, "count": int,
+        "total": int, "truncated": bool}``. ``next_since`` is the largest
+        ``since`` value across the returned entries (or the input
+        ``since`` when no entries matched). ``filename`` writes the JSON
+        payload under the output dir and returns only artifact metadata.
         """
 
-        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
-            raise ValueError("limit must be a non-negative int")
+        _validate_limit(limit)
         if not isinstance(max_body_bytes, int) or max_body_bytes < 0:
             raise ValueError("max_body_bytes must be a non-negative int")
         if since is not None and (
@@ -417,9 +424,8 @@ class _ProxyInterceptCapabilityMixin:
         matches: list[dict] = []
         for entry in snapshot:
             entry_since = entry.get("since")
-            if since is not None and isinstance(entry_since, int):
-                if entry_since <= since:
-                    continue
+            if since is not None and isinstance(entry_since, int) and entry_since <= since:
+                continue
             req = entry.get("request") if isinstance(entry.get("request"), dict) else None
             if host_needle is not None:
                 req_host = (req or {}).get("host") if req else None
@@ -435,8 +441,12 @@ class _ProxyInterceptCapabilityMixin:
                     continue
             matches.append(entry)
 
-        truncated = len(matches) > limit
-        selected = matches[:limit] if limit > 0 else matches[:0]
+        if limit is None:
+            truncated = False
+            selected = matches
+        else:
+            truncated = len(matches) > limit
+            selected = matches[:limit] if limit > 0 else matches[:0]
 
         result_entries: list[dict] = []
         next_since = since if isinstance(since, int) else -1
@@ -451,11 +461,26 @@ class _ProxyInterceptCapabilityMixin:
 
         if next_since < 0:
             next_since = 0
-        return {
+        payload = {
             "flows": result_entries,
             "next_since": next_since,
+            "count": len(result_entries),
+            "total": len(matches),
             "truncated": truncated,
         }
+        if filename is not None:
+            path = self.config.path_policy.resolve_output(filename)
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            path.write_bytes(data)
+            return {
+                "path": str(path),
+                "bytes": len(data),
+                "next_since": next_since,
+                "count": payload["count"],
+                "total": payload["total"],
+                "truncated": truncated,
+            }
+        return payload
 
     @capability("proxy-intercept")
     def browser_intercept_flow(
@@ -463,13 +488,15 @@ class _ProxyInterceptCapabilityMixin:
         flow_id: str,
         include_bodies: bool = True,
         max_body_bytes: int = _DEFAULT_FLOW_BODY_LIMIT,
+        filename: str | None = None,
     ) -> dict[str, Any]:
         """Return one flow by its mitmproxy-assigned ``flow.id``.
 
         Defaults to ``include_bodies=True`` so the typical
         "give me everything about this one flow" call gets the body.
         ``max_body_bytes`` caps each body the same way
-        :meth:`browser_intercept_flows` does.
+        :meth:`browser_intercept_flows` does. ``filename`` writes the JSON
+        payload under the output dir and returns only artifact metadata.
 
         Raises :class:`ValueError` if ``flow_id`` is not in the
         current buffer (the entry may have been evicted past
@@ -488,7 +515,19 @@ class _ProxyInterceptCapabilityMixin:
         for entry in mgr.flow_buffer:
             if entry.get("id") == flow_id:
                 raw = mgr.flow_by_id(flow_id)
-                return _materialise_entry(entry, raw, include_bodies, max_body_bytes)
+                payload = _materialise_entry(
+                    entry, raw, include_bodies, max_body_bytes
+                )
+                if filename is not None:
+                    path = self.config.path_policy.resolve_output(filename)
+                    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                    path.write_bytes(data)
+                    return {
+                        "path": str(path),
+                        "bytes": len(data),
+                        "flow_id": flow_id,
+                    }
+                return payload
         raise ValueError(f"unknown flow_id {flow_id!r}")
 
     @capability("proxy-intercept")
@@ -534,9 +573,9 @@ class _ProxyInterceptCapabilityMixin:
         self,
         flow_id: str,
         *,
-        method: str | None = None,
+        method: ProxyHttpMethod | None = None,
         url: str | None = None,
-        http_version: str | None = None,
+        http_version: ProxyHttpVersion | None = None,
         set_request_headers: dict[str, str] | None = None,
         remove_request_headers: list[str] | None = None,
         body: str | None = None,

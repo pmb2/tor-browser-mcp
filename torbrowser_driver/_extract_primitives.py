@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
+from ._primitive_helpers import _limit_items, _write_json_payload
 from .capabilities import capability
 
 if TYPE_CHECKING:
@@ -179,18 +180,24 @@ class _ExtractCapabilityMixin:
     """Implements the ``extract`` capability surface on :class:`TorBrowserDriver`."""
 
     if TYPE_CHECKING:
-        webdriver: "webdriver.Firefox | None"
-        config: "DriverConfig"
+        webdriver: webdriver.Firefox | None
+        config: DriverConfig
 
-        def _require_driver(self) -> "webdriver.Firefox": ...
+        def _require_driver(self) -> webdriver.Firefox: ...
 
     @capability("extract")
-    def browser_extract_links(self, url_filter: str | None = None) -> dict[str, Any]:
-        """Return every ``<a href>`` on the page.
+    def browser_extract_links(
+        self,
+        url_filter: str | None = None,
+        limit: int | None = None,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """Return ``<a href>`` entries from the page.
 
         ``url_filter`` is an optional case-insensitive substring matched
-        against the ``href``. Each entry carries ``href``, ``text``,
-        ``title``, and ``rel``.
+        against the ``href``. ``limit`` caps inline entries after filtering.
+        ``filename`` writes the full JSON payload under the output dir and
+        returns only artifact metadata.
         """
 
         drv = self._require_driver()
@@ -202,67 +209,171 @@ class _ExtractCapabilityMixin:
                 for link in links
                 if needle in str(link.get("href") or "").lower()
             ]
-        return {"links": links}
+        total = len(links)
+        links, truncated = _limit_items(links, limit)
+        payload = {
+            "links": links,
+            "count": len(links),
+            "total": total,
+            "truncated": truncated,
+        }
+        if filename is not None:
+            return _write_json_payload(self.config.path_policy, filename, payload)
+        return payload
 
     @capability("extract")
-    def browser_extract_forms(self) -> dict[str, Any]:
-        """Return every ``<form>`` with its action/method and child fields."""
+    def browser_extract_forms(
+        self,
+        limit: int | None = None,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """Return ``<form>`` entries with action/method and child fields.
+
+        ``limit`` caps inline entries. ``filename`` writes the full JSON
+        payload under the output dir and returns only artifact metadata.
+        """
 
         drv = self._require_driver()
         forms = list(drv.execute_script(_FORMS_JS) or [])
-        return {"forms": forms}
+        total = len(forms)
+        forms, truncated = _limit_items(forms, limit)
+        payload = {
+            "forms": forms,
+            "count": len(forms),
+            "total": total,
+            "truncated": truncated,
+        }
+        if filename is not None:
+            return _write_json_payload(self.config.path_policy, filename, payload)
+        return payload
 
     @capability("extract")
-    def browser_extract_inputs(self) -> dict[str, Any]:
-        """Return every ``<input>``, ``<textarea>``, and ``<select>`` on the page."""
+    def browser_extract_inputs(
+        self,
+        limit: int | None = None,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """Return ``<input>``, ``<textarea>``, and ``<select>`` entries.
+
+        ``limit`` caps inline entries. ``filename`` writes the full JSON
+        payload under the output dir and returns only artifact metadata.
+        """
 
         drv = self._require_driver()
         inputs = list(drv.execute_script(_INPUTS_JS) or [])
-        return {"inputs": inputs}
+        total = len(inputs)
+        inputs, truncated = _limit_items(inputs, limit)
+        payload = {
+            "inputs": inputs,
+            "count": len(inputs),
+            "total": total,
+            "truncated": truncated,
+        }
+        if filename is not None:
+            return _write_json_payload(self.config.path_policy, filename, payload)
+        return payload
 
     @capability("extract")
     def browser_extract_scripts(
-        self, include_inline: bool = False
+        self,
+        include_inline: bool = False,
+        limit: int | None = None,
+        filename: str | None = None,
     ) -> dict[str, Any]:
-        """Return every ``<script>`` element.
+        """Return ``<script>`` elements.
 
         ``src`` is the external URL (or ``None`` for inline scripts).
-        ``length`` is the character count of inline content.
-        ``preview`` carries the first ~200 characters of inline content
-        only when ``include_inline=True``.
+        ``length`` is the character count of inline content. ``preview``
+        carries the first ~200 characters of inline content only when
+        ``include_inline=True``. ``limit`` caps inline entries; ``filename``
+        writes the full JSON payload under the output dir and returns only
+        artifact metadata.
         """
 
         drv = self._require_driver()
         scripts = list(
             drv.execute_script(_SCRIPTS_JS, bool(include_inline)) or []
         )
-        return {"scripts": scripts}
+        total = len(scripts)
+        scripts, truncated = _limit_items(scripts, limit)
+        payload = {
+            "scripts": scripts,
+            "count": len(scripts),
+            "total": total,
+            "truncated": truncated,
+        }
+        if filename is not None:
+            return _write_json_payload(self.config.path_policy, filename, payload)
+        return payload
 
     @capability("extract")
-    def browser_extract_metadata(self) -> dict[str, Any]:
-        """Return ``<meta>`` tags plus title, language, charset, and canonical."""
+    def browser_extract_metadata(
+        self,
+        limit: int | None = None,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """Return ``<meta>`` tags plus title, language, charset, and canonical.
+
+        ``limit`` caps inline ``<meta>`` entries; ``count``/``total``/
+        ``truncated`` are reported at the top level alongside the
+        ``meta`` list. ``filename`` writes the full JSON payload under
+        the output dir and returns only artifact metadata.
+        """
 
         drv = self._require_driver()
         result = drv.execute_script(_METADATA_JS) or {}
-        result.setdefault("meta", [])
-        return result
+        meta_items = list(result.get("meta") or [])
+        total = len(meta_items)
+        meta_items, truncated = _limit_items(meta_items, limit)
+        payload = {
+            "title": result.get("title"),
+            "lang": result.get("lang"),
+            "charset": result.get("charset"),
+            "canonical": result.get("canonical"),
+            "meta": meta_items,
+            "count": len(meta_items),
+            "total": total,
+            "truncated": truncated,
+        }
+        if filename is not None:
+            return _write_json_payload(self.config.path_policy, filename, payload)
+        return payload
 
     @capability("extract")
-    def browser_extract_tables(self) -> dict[str, Any]:
-        """Return one entry per ``<table>`` with headers and cell rows.
+    def browser_extract_tables(
+        self,
+        limit: int | None = None,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """Return table summaries with headers and capped cell rows.
 
         Each table is capped at 200 rows; tables that exceed the cap carry
-        ``truncated: true``. ``colcount`` is the maximum row length
-        observed (or the header count, whichever is larger).
+        ``truncated: true``. ``limit`` caps the number of returned table
+        entries. ``filename`` writes the full JSON payload under the output
+        dir and returns only artifact metadata.
         """
 
         drv = self._require_driver()
         tables = list(drv.execute_script(_TABLES_JS, _TABLE_ROW_CAP) or [])
-        return {"tables": tables}
+        total = len(tables)
+        tables, truncated = _limit_items(tables, limit)
+        payload = {
+            "tables": tables,
+            "count": len(tables),
+            "total": total,
+            "truncated": truncated,
+        }
+        if filename is not None:
+            return _write_json_payload(self.config.path_policy, filename, payload)
+        return payload
 
     @capability("extract")
     def browser_find_text(
-        self, pattern: str, regex: bool = False
+        self,
+        pattern: str,
+        regex: bool = False,
+        limit: int | None = None,
+        filename: str | None = None,
     ) -> dict[str, Any]:
         """Search ``document.body.innerText`` for ``pattern``.
 
@@ -270,6 +381,8 @@ class _ExtractCapabilityMixin:
         ``regex=True`` ``pattern`` is compiled as a Python regular
         expression. Each match is returned with its ``offset`` into the body
         text and an ~80-character ``snippet`` centred on the match.
+        ``limit`` caps inline matches. ``filename`` writes the full JSON
+        payload under the output dir and returns only artifact metadata.
         """
 
         drv = self._require_driver()
@@ -286,7 +399,17 @@ class _ExtractCapabilityMixin:
             start = 0
             needle_len = len(pattern)
             if needle_len == 0:
-                return {"pattern": pattern, "regex": regex, "matches": []}
+                payload = {
+                    "pattern": pattern,
+                    "regex": regex,
+                    "matches": [],
+                    "count": 0,
+                    "total": 0,
+                    "truncated": False,
+                }
+                if filename is not None:
+                    return _write_json_payload(self.config.path_policy, filename, payload)
+                return payload
             while True:
                 idx = body.find(pattern, start)
                 if idx < 0:
@@ -299,7 +422,19 @@ class _ExtractCapabilityMixin:
                 )
                 start = idx + needle_len
 
-        return {"pattern": pattern, "regex": regex, "matches": matches}
+        total = len(matches)
+        matches, truncated = _limit_items(matches, limit)
+        payload = {
+            "pattern": pattern,
+            "regex": regex,
+            "matches": matches,
+            "count": len(matches),
+            "total": total,
+            "truncated": truncated,
+        }
+        if filename is not None:
+            return _write_json_payload(self.config.path_policy, filename, payload)
+        return payload
 
     @capability("extract")
     def browser_find_selector(self, selector: str) -> dict[str, Any]:

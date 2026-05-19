@@ -9,11 +9,15 @@ and mock registrations; no Firefox is launched.
 
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from torbrowser_driver import PathPolicy
 from torbrowser_driver._helper_extension_primitives import (
     _HelperExtensionCapabilityMixin,
     _resolve_route_mode,
@@ -208,6 +212,12 @@ def test_route_mode_mutual_exclusion_redirect_headers() -> None:
         )
 
 
+def test_route_redirect_url_rejects_non_http_scheme() -> None:
+    drv = _Driver(bridge=_FakeBridge())
+    with pytest.raises(ValueError, match="absolute http"):
+        drv.browser_route("*://e/*", redirect_url="file:///etc/passwd")
+
+
 def test_route_requires_a_mode() -> None:
     drv = _Driver(bridge=_FakeBridge())
     with pytest.raises(ValueError, match="one of"):
@@ -280,16 +290,19 @@ def test_route_list_echoes_mode_specific_fields() -> None:
     drv.browser_route("*://h/*", set_request_headers={"X": "1"})
 
     result = drv.browser_route_list()
-    assert set(result.keys()) == {"routes"}
+    assert set(result.keys()) == {"routes", "count", "total", "truncated"}
     routes = result["routes"]
     assert len(routes) == 3
+    assert result["count"] == 3
+    assert result["total"] == 3
+    assert result["truncated"] is False
     by_pattern = {r["pattern"]: r for r in routes}
 
     mock_entry = by_pattern["*://m/*"]
     assert mock_entry["mode"] == "mock"
     assert mock_entry["status"] == 418
     assert mock_entry["content_type"] == "text/plain"
-    assert mock_entry["body_size"] == len("hello".encode("utf-8"))
+    assert mock_entry["body_size"] == len(b"hello")
     assert mock_entry["headers"] == {"X-Test": "yes"}
     # The bridge URL is a driver-internal implementation detail and
     # must not surface in browser_route_list output.
@@ -331,7 +344,12 @@ def test_unroute_by_route_id_returns_one() -> None:
 
     result = drv.browser_unroute(route_id=rid)
     assert result == {"removed": 1}
-    assert drv.browser_route_list() == {"routes": []}
+    assert drv.browser_route_list() == {
+        "routes": [],
+        "count": 0,
+        "total": 0,
+        "truncated": False,
+    }
     method, params = bridge.calls[-1]
     assert method == "route.remove"
     assert params["route_ids"] == [rid]
@@ -391,7 +409,33 @@ def test_unroute_raises_when_bridge_missing() -> None:
 
 def test_route_list_empty_when_no_routes() -> None:
     drv = _Driver(bridge=_FakeBridge())
-    assert drv.browser_route_list() == {"routes": []}
+    assert drv.browser_route_list() == {
+        "routes": [],
+        "count": 0,
+        "total": 0,
+        "truncated": False,
+    }
+
+
+def test_route_list_limit_and_file_output(tmp_path: Path) -> None:
+    drv = _Driver(bridge=_FakeBridge())
+    drv.config = SimpleNamespace(
+        path_policy=PathPolicy.from_config(output_dir=tmp_path / "out")
+    )
+    drv.browser_route("*://a/*", body="a", priority=1)
+    drv.browser_route("*://b/*", body="b", priority=2)
+
+    limited = drv.browser_route_list(limit=1)
+    assert len(limited["routes"]) == 1
+    assert limited["count"] == 1
+    assert limited["total"] == 2
+    assert limited["truncated"] is True
+
+    written = drv.browser_route_list(filename="routes.json")
+    path = Path(written["path"])
+    assert "routes" not in written
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert len(payload["routes"]) == 2
 
 
 # --- browser_network_state_set ----------------------------------------------

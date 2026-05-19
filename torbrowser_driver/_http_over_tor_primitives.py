@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import base64
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 from urllib.parse import urljoin, urlparse
 
 from urllib3.contrib.socks import SOCKSProxyManager
@@ -35,9 +35,27 @@ from .capabilities import capability
 from .exceptions import TorBrowserDriverError
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    import urllib3
     from selenium import webdriver
 
     from .config import DriverConfig
+
+
+HttpMethod = Literal["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
+
+
+class HttpSequenceRequestRequired(TypedDict):
+    url: str
+
+
+class HttpSequenceRequest(HttpSequenceRequestRequired, total=False):
+    method: HttpMethod
+    headers: dict[str, str]
+    body: str
+    timeout: float
+    max_response_bytes: int
 
 
 _DEFAULT_MAX_RESPONSE_BYTES = 5 * 1024 * 1024
@@ -63,6 +81,13 @@ def _host_of(url: str) -> str:
     return (urlparse(url).hostname or "").lower()
 
 
+def _validate_http_url(url: str) -> None:
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    if scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(f"url must be an absolute http(s) URL, got {url!r}")
+
+
 def _strip_leading_dot(domain: str) -> str:
     return domain.lstrip(".").lower() if domain else ""
 
@@ -84,13 +109,14 @@ def _parse_set_cookie(value: str) -> tuple[str, str] | None:
     return name, val.strip()
 
 
-def _iter_set_cookie(headers: "urllib3.HTTPHeaderDict | dict[str, str]"):
+def _iter_set_cookie(
+    headers: urllib3.HTTPHeaderDict | dict[str, str],
+) -> Iterator[str]:
     """Yield each ``Set-Cookie`` header value, handling multi-valued headers."""
 
     getlist = getattr(headers, "getlist", None)
     if callable(getlist):
-        for value in getlist("Set-Cookie"):
-            yield value
+        yield from getlist("Set-Cookie")
         return
     raw = headers.get("Set-Cookie") if hasattr(headers, "get") else None
     if not raw:
@@ -99,7 +125,7 @@ def _iter_set_cookie(headers: "urllib3.HTTPHeaderDict | dict[str, str]"):
 
 
 def _flatten_headers(
-    headers: "urllib3.HTTPHeaderDict | dict[str, str]",
+    headers: urllib3.HTTPHeaderDict | dict[str, str],
 ) -> dict[str, str]:
     """Return ``{name: value}`` with multi-valued headers comma-joined."""
 
@@ -107,7 +133,7 @@ def _flatten_headers(
     getlist = getattr(headers, "getlist", None)
     if callable(getlist):
         seen: set[str] = set()
-        for name in headers.keys():
+        for name in headers.keys():  # noqa: SIM118  # headers stub exposes .keys() but is not iterable
             lower = name.lower()
             if lower in seen:
                 continue
@@ -156,10 +182,10 @@ class _HttpOverTorCapabilityMixin:
     """
 
     if TYPE_CHECKING:
-        webdriver: "webdriver.Firefox | None"
-        config: "DriverConfig"
+        webdriver: webdriver.Firefox | None
+        config: DriverConfig
 
-        def _require_driver(self) -> "webdriver.Firefox": ...
+        def _require_driver(self) -> webdriver.Firefox: ...
 
     def _build_proxy_manager(self) -> SOCKSProxyManager:
         proxy_url = f"socks5h://127.0.0.1:{int(self.config.socks_port)}"
@@ -343,7 +369,7 @@ class _HttpOverTorCapabilityMixin:
     @capability("http-over-tor")
     def tor_http_request(
         self,
-        method: str,
+        method: HttpMethod,
         url: str,
         headers: dict[str, str] | None = None,
         body: str | bytes | None = None,
@@ -370,12 +396,17 @@ class _HttpOverTorCapabilityMixin:
         into a ``Cookie`` header keyed by host; a caller-supplied
         ``Cookie`` header in ``headers`` takes precedence per hop.
 
+        ``filename`` writes the raw response body to disk and returns the
+        same per-request summary with ``body``/``body_base64`` replaced by
+        ``{"path": str, "bytes": int}``.
+
         This is **Tor-routed but not browser-equivalent**: no DOM, no JS,
         no service workers, no cache, and the TLS/HTTP fingerprint differs
         from Tor Browser's. Use the navigation primitives when fingerprint
         parity matters.
         """
 
+        _validate_http_url(url)
         normalised = self._normalise_method(method)
         manager = self._build_proxy_manager()
 
@@ -415,17 +446,21 @@ class _HttpOverTorCapabilityMixin:
                 if "body" in result
                 else base64.b64decode(result.get("body_base64", ""))
             )
-            if isinstance(payload, str):
-                path.write_bytes(payload.encode("utf-8"))
-            else:
-                path.write_bytes(payload or b"")
-            result["path"] = str(path)
+            data = payload.encode("utf-8") if isinstance(payload, str) else (payload or b"")
+            path.write_bytes(data)
+            summary = {
+                k: v
+                for k, v in result.items()
+                if k not in ("body", "body_base64")
+            }
+            summary.update({"path": str(path), "bytes": len(data)})
+            return summary
         return result
 
     @capability("http-over-tor")
     def tor_http_sequence(
         self,
-        requests: list[dict[str, Any]],
+        requests: list[HttpSequenceRequest],
         cookie_jar: bool = True,
         use_browser_cookies: bool = False,
         filename: str | None = None,
@@ -447,8 +482,10 @@ class _HttpOverTorCapabilityMixin:
 
         Returns ``{"results": [<per-request dict>], "final_cookie_jar":
         {host: {name: value}}}``. When ``filename`` is set the full
-        results JSON is written under the output dir and the returned
-        dict carries the ``path``.
+        results JSON is written under the output dir and the inline
+        ``results`` list is dropped; the returned dict carries
+        ``{"path": str, "bytes": int, "results_count": int,
+        "final_cookie_jar": ...}``.
 
         Same fingerprint caveats as :meth:`tor_http_request` apply.
         """
@@ -466,7 +503,7 @@ class _HttpOverTorCapabilityMixin:
                 browser_cookies = list(drv.get_cookies() or [])
             except Exception:
                 browser_cookies = []
-            _merge_browser_cookies(jar, browser_cookies)  # type: ignore[arg-type]
+            _merge_browser_cookies(jar, browser_cookies)
 
         results: list[dict[str, Any]] = []
         for entry in requests:
@@ -477,6 +514,7 @@ class _HttpOverTorCapabilityMixin:
             url = entry.get("url")
             if not isinstance(url, str) or not url:
                 raise ValueError("each requests entry must include a non-empty 'url'")
+            _validate_http_url(url)
             method = self._normalise_method(str(entry.get("method", "GET")))
             headers = entry.get("headers")
             body = entry.get("body")
@@ -512,6 +550,12 @@ class _HttpOverTorCapabilityMixin:
         }
         if filename is not None:
             path = self.config.path_policy.resolve_output(filename)
-            path.write_bytes(json.dumps(out, ensure_ascii=False).encode("utf-8"))
-            out["path"] = str(path)
+            data = json.dumps(out, ensure_ascii=False).encode("utf-8")
+            path.write_bytes(data)
+            return {
+                "path": str(path),
+                "bytes": len(data),
+                "results_count": len(results),
+                "final_cookie_jar": final_jar,
+            }
         return out
