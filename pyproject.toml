@@ -39,6 +39,8 @@ Issues = "https://github.com/Boti-Ormandi/tor-browser-mcp/issues"
 [project.optional-dependencies]
 dev = [
     "pytest>=7",
+    "ruff>=0.6",
+    "mypy>=1.10",
 ]
 proxy-intercept = [
     "mitmproxy>=11,<13",
@@ -71,9 +73,71 @@ target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
+select = [
+    "E",
+    "F",
+    "W",
+    "I",
+    "B",
+    "SIM",
+    "UP",
+    "RUF",
+    "RET",
+    "PT",
+    "TCH",
+]
+ignore = [
+    # try/except/pass to contextlib.suppress; mechanical conversion that adds
+    # an indent level and an import for no behaviour change.
+    "SIM105",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    # Tests routinely raise on broad exception types and check the message
+    # separately; that pattern is intentional and pre-dates this config.
+    "PT011",
+    # Composite assertions are common in tests and easier to read than the
+    # split form pytest-style would prefer.
+    "PT018",
+    # Tests import application classes at module scope for readability; the
+    # TYPE_CHECKING migration is only enforced on the library packages.
+    "TC001",
+    "TC002",
+    "TC003",
+]
 
 [tool.mypy]
-python_version = "3.10"
-strict = false
+python_version = "3.12"
 ignore_missing_imports = true
+# torbrowser_mcp has a narrow surface with explicit types and runs under
+# strict mypy. torbrowser_driver wraps selenium where the upstream stubs are
+# weak; full strict mode produces dozens of false positives, so the broad
+# package runs in a partial-strict profile that catches the audit findings
+# most likely to recur: unused type-ignore comments and redundant casts.
+# python_version is set to 3.12 (above the project's 3.10 minimum) so mypy
+# parses third-party packages that use PEP 695 type statements; the language
+# features used in this codebase target 3.10 regardless.
+follow_imports = "silent"
+files = ["torbrowser_mcp", "torbrowser_driver"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+# Default-mypy errors against selenium-wrapping code stem from weak upstream
+# stubs (untyped generics, Any return types, module-attribute shadowing).
+# Disable those whole categories rather than litter the code with
+# type:ignore comments that themselves fail warn_unused_ignores.
+disable_error_code = [
+    "type-arg",
+    "no-untyped-call",
+    "no-any-return",
+    "name-defined",
+    "assignment",
+    "arg-type",
+]
+
+[[tool.mypy.overrides]]
+module = "torbrowser_mcp.*"
+strict = true
+# torbrowser_mcp is the strict-mode scope; re-enable the categories disabled
+# globally so the small typed package still benefits from full strict.
+disable_error_code = []
