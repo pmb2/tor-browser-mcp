@@ -428,7 +428,7 @@ def test_network_state_set_round_trip_toggle() -> None:
 @pytest.mark.parametrize("bad", ["OFFLINE", "Online", "disabled", "", None, 1])
 def test_network_state_set_rejects_invalid_state(bad: Any) -> None:
     drv = _Driver(bridge=_FakeBridge())
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"state must be 'online' or 'offline'"):
         drv.browser_network_state_set(bad)  # type: ignore[arg-type]
 
 

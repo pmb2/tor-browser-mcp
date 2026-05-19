@@ -326,13 +326,13 @@ def test_flows_raises_on_dead_proxy() -> None:
 
 def test_flows_rejects_negative_limit() -> None:
     drv = _Driver(_StubManager())
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="limit must be a non-negative int"):
         drv.browser_intercept_flows(limit=-1)
 
 
 def test_flows_rejects_non_int_since() -> None:
     drv = _Driver(_StubManager())
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="since must be an int or None"):
         drv.browser_intercept_flows(since="0")  # type: ignore[arg-type]
 
 
@@ -367,13 +367,13 @@ def test_flow_lookup_unknown_id_raises_value_error() -> None:
     mgr = _StubManager()
     mgr.recorder.request(_flow_no_response())
     drv = _Driver(mgr)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="unknown flow_id"):
         drv.browser_intercept_flow(flow_id="does-not-exist")
 
 
 def test_flow_lookup_rejects_empty_id() -> None:
     drv = _Driver(_StubManager())
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="flow_id must be a non-empty string"):
         drv.browser_intercept_flow(flow_id="")
 
 

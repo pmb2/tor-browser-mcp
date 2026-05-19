@@ -82,8 +82,8 @@ def test_helper_bridge_connects_and_pings(drv: TorBrowserDriver) -> None:
     assert bridge.connected, "extension should have completed the hello handshake by now"
 
     response = bridge.request("ping", {}, timeout=5.0)
-    assert response.get("ok") is True or "pong" in str(response), (
-        f"expected a pong-shaped response, got {response!r}"
+    assert response == {"pong": True}, (
+        f"expected the exact ping response, got {response!r}"
     )
 
 

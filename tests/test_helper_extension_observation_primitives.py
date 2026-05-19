@@ -730,13 +730,13 @@ def test_finalize_capture_assembles_body_when_no_final_chunk_arrived() -> None:
 
 def test_add_init_script_rejects_empty_source() -> None:
     drv = _Driver(bridge=_FakeBridge())
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="source must be a non-empty string"):
         drv.browser_add_init_script("")
 
 
 def test_add_init_script_rejects_non_string() -> None:
     drv = _Driver(bridge=_FakeBridge())
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="source must be a non-empty string"):
         drv.browser_add_init_script(None)  # type: ignore[arg-type]
 
 

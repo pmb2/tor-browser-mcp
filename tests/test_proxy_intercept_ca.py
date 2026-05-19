@@ -70,6 +70,5 @@ def test_missing_pem_after_generation_raises(monkeypatch, tmp_path: Path) -> Non
 
     monkeypatch.setattr(real_certs, "CertStore", _NoopStore)
 
-    with pytest.raises(ProxyInterceptError) as ei:
+    with pytest.raises(ProxyInterceptError, match="expected CA cert"):
         generate_session_ca(tmp_path / "ca")
-    assert "expected CA cert" in str(ei.value)
