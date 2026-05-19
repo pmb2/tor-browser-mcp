@@ -68,17 +68,41 @@ def _build_config(
     )
 
 
-@pytest.fixture()
-def drv(
+@pytest.fixture(scope="module")
+def _module_drv(
     destructive_caps_allowed: None,
     tbb_root: Path,
     geckodriver_path: Path | None,
     tmp_path_factory: pytest.TempPathFactory,
 ) -> Iterator[TorBrowserDriver]:
+    """Single Tor Browser boot shared by every test that tolerates state reset.
+
+    A full TB launch with the ``proxy-intercept`` cap takes 30-40 s; the
+    four observation/replay tests in this module can all run against the
+    same substrate provided the recorder buffer and cursor are cleared
+    between cases. The policies-restore test below builds its own driver
+    because it tests the install-time/teardown-time side-effects of
+    construction, which a shared session cannot exercise.
+    """
+
     base = tmp_path_factory.mktemp("proxy-intercept-smoke")
     config = _build_config(tbb_root, geckodriver_path, base)
     with TorBrowserDriver(config) as driver:
         yield driver
+
+
+@pytest.fixture()
+def drv(_module_drv: TorBrowserDriver) -> TorBrowserDriver:
+    """Module-scoped driver with per-test recorder reset.
+
+    ``browser_intercept_stop`` empties the flow buffer and resets the
+    monotonic ``since`` cursor without touching the daemon thread or the
+    upstream SOCKS chain, so each test starts from a clean recorder
+    state even though the underlying TB session is shared.
+    """
+
+    _module_drv.browser_intercept_stop()
+    return _module_drv
 
 
 def test_proxy_intercept_records_https_navigation(drv: TorBrowserDriver) -> None:
