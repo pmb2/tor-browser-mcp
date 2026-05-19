@@ -199,6 +199,45 @@ def test_start_after_stop_returns_zero_cursor() -> None:
     assert result["since"] == 0
 
 
+def test_start_cursor_aligns_with_first_subsequent_flow_since() -> None:
+    """The cursor returned by start is the ``since`` value the next
+    captured flow will receive; passing it back to ``flows`` returns
+    that flow.
+    """
+
+    mgr = _StubManager()
+    for _ in range(3):
+        mgr.recorder.request(_flow_no_response())
+    drv = _Driver(mgr)
+    started = drv.browser_intercept_start()
+    cursor = started["since"]
+    mgr.recorder.request(_flow_no_response())
+    first_new_since = mgr.recorder.buffer[-1]["since"]
+    assert cursor == first_new_since
+    result = drv.browser_intercept_flows(since=cursor)
+    assert [e["since"] for e in result["flows"]] == [cursor]
+
+
+def test_start_cursor_on_fresh_buffer_then_flows_round_trip() -> None:
+    """On a fresh buffer the start cursor is 0; once flows arrive,
+    ``flows(since=0)`` returns them all and ``next_since`` advances
+    past the highest entry.
+    """
+
+    mgr = _StubManager()
+    drv = _Driver(mgr)
+    started = drv.browser_intercept_start()
+    assert started["since"] == 0
+    for _ in range(2):
+        mgr.recorder.request(_flow_no_response())
+    result = drv.browser_intercept_flows(since=started["since"])
+    assert [e["since"] for e in result["flows"]] == [0, 1]
+    assert result["next_since"] == 2
+    second = drv.browser_intercept_flows(since=result["next_since"])
+    assert second["flows"] == []
+    assert second["next_since"] == 2
+
+
 # ---------------------------------------------------------------------------
 # browser_intercept_flows: filtering + body handling
 # ---------------------------------------------------------------------------
@@ -279,19 +318,19 @@ def test_flows_since_cursor_only_returns_newer() -> None:
     drv = _Driver(mgr)
     result = drv.browser_intercept_flows(since=2)
     sinces = [e["since"] for e in result["flows"]]
-    assert sinces == [3, 4]
-    assert result["next_since"] == 4
+    assert sinces == [2, 3, 4]
+    assert result["next_since"] == 5
 
 
-def test_flows_since_zero_returns_all_after_zero() -> None:
+def test_flows_since_zero_returns_all() -> None:
     mgr = _StubManager()
     for _ in range(3):
         mgr.recorder.request(_flow_no_response())
     drv = _Driver(mgr)
     result = drv.browser_intercept_flows(since=0)
-    # since=0 means strictly greater than 0; entries 1 and 2.
     sinces = [e["since"] for e in result["flows"]]
-    assert sinces == [1, 2]
+    assert sinces == [0, 1, 2]
+    assert result["next_since"] == 3
 
 
 def test_flows_limit_caps_and_marks_truncated() -> None:

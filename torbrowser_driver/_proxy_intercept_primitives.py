@@ -320,11 +320,19 @@ class _ProxyInterceptCapabilityMixin:
 
         The substrate itself is started in
         :meth:`TorBrowserDriver.__enter__`; this tool returns the
-        current monotonic ``since`` cursor so callers can pass it back
-        to :meth:`browser_intercept_flows` to tail new entries. The
-        recorder buffer is not cleared here -- a fresh tail is
-        achieved by passing the returned cursor on the next
-        ``browser_intercept_flows`` call.
+        ``since`` value that the next captured flow will be assigned,
+        so callers can pass it back to :meth:`browser_intercept_flows`
+        to tail new entries. The recorder buffer is not cleared here
+        -- a fresh tail is achieved by passing the returned cursor on
+        the next ``browser_intercept_flows`` call.
+
+        Cursor semantics: ``since`` is an **inclusive** lower bound.
+        ``browser_intercept_flows(since=N)`` returns all entries whose
+        ``flow.since`` is ``>= N``. The value returned here is the
+        ``flow.since`` that the *next* captured flow will receive, so
+        ``browser_intercept_flows(since=<value-returned-by-start>)``
+        returns exactly the flows captured after this call. On a fresh
+        buffer the returned cursor is ``0``.
 
         Returns ``{"started": True, "intercept_port": int,
         "ca_fingerprint": str, "since": int}``.
@@ -377,10 +385,11 @@ class _ProxyInterceptCapabilityMixin:
         """List recorded flows with optional filtering.
 
         Filters are applied in order: ``since`` (only entries with
-        monotonic index strictly greater than ``since``), ``host``
-        (case-insensitive substring match against
-        ``request.host``), ``status_code`` (exact match against
-        ``response.status_code``; skips flows with no response).
+        monotonic index ``>= since`` -- ``since`` is an inclusive
+        lower bound), ``host`` (case-insensitive substring match
+        against ``request.host``), ``status_code`` (exact match
+        against ``response.status_code``; skips flows with no
+        response).
 
         ``limit`` caps the number of returned entries; pass ``None`` for
         no cap. ``truncated`` is ``True`` when more entries matched than
@@ -394,10 +403,13 @@ class _ProxyInterceptCapabilityMixin:
         ``str``, others as ``{"base64": ...}``.
 
         Returns ``{"flows": [...], "next_since": int, "count": int,
-        "total": int, "truncated": bool}``. ``next_since`` is the largest
-        ``since`` value across the returned entries (or the input
-        ``since`` when no entries matched). ``filename`` writes the JSON
-        payload under the output dir and returns only artifact metadata.
+        "total": int, "truncated": bool}``. ``next_since`` is one past
+        the largest ``since`` value across the returned entries -- pass
+        it back as ``since`` on the next call to tail strictly newer
+        flows. When no entries matched, ``next_since`` echoes the input
+        ``since`` (or the recorder's current cursor when ``since`` was
+        ``None``). ``filename`` writes the JSON payload under the
+        output dir and returns only artifact metadata.
         """
 
         _validate_limit(limit)
@@ -424,7 +436,7 @@ class _ProxyInterceptCapabilityMixin:
         matches: list[dict] = []
         for entry in snapshot:
             entry_since = entry.get("since")
-            if since is not None and isinstance(entry_since, int) and entry_since <= since:
+            if since is not None and isinstance(entry_since, int) and entry_since < since:
                 continue
             req = entry.get("request") if isinstance(entry.get("request"), dict) else None
             if host_needle is not None:
@@ -449,18 +461,22 @@ class _ProxyInterceptCapabilityMixin:
             selected = matches[:limit] if limit > 0 else matches[:0]
 
         result_entries: list[dict] = []
-        next_since = since if isinstance(since, int) else -1
+        max_seen: int | None = None
         for entry in selected:
             raw = mgr.flow_by_id(entry.get("id", ""))
             result_entries.append(
                 _materialise_entry(entry, raw, include_bodies, max_body_bytes)
             )
             es = entry.get("since")
-            if isinstance(es, int) and es > next_since:
-                next_since = es
+            if isinstance(es, int) and (max_seen is None or es > max_seen):
+                max_seen = es
 
-        if next_since < 0:
-            next_since = 0
+        if max_seen is not None:
+            next_since = max_seen + 1
+        elif isinstance(since, int):
+            next_since = since
+        else:
+            next_since = mgr.next_since
         payload = {
             "flows": result_entries,
             "next_since": next_since,
@@ -589,9 +605,18 @@ class _ProxyInterceptCapabilityMixin:
         supplied modifications, and dispatches the copy through
         mitmproxy's client-replay path. The dispatched flow surfaces in
         the recorder buffer as a fresh entry with its own monotonic
-        ``since`` index and its own id; full request / response detail
-        is available through :meth:`browser_intercept_flow` against
-        the returned ``replay_flow_id``.
+        ``since`` index and its own id.
+
+        **Response retrieval is asynchronous.** This call returns once
+        the dispatched request has been observed by the recorder; the
+        upstream response is captured separately on the recorder's own
+        event loop and may not yet be attached to the buffered entry
+        when this call returns. The inline return therefore contains
+        only the dispatched request -- no response. To get the
+        response, poll :meth:`browser_intercept_flow` against the
+        returned ``replay_flow_id`` after a short wait (a few hundred
+        milliseconds is typically enough for a fast endpoint; the
+        ``next_action_hint`` field in the return points at this call).
 
         Modification semantics match :func:`_apply_replay_modifications`:
         ``body`` is UTF-8 encoded, ``body_base64`` is base64-decoded,
@@ -601,9 +626,11 @@ class _ProxyInterceptCapabilityMixin:
         ``remove_request_headers``.
 
         Returns ``{"replay_flow_id": str, "source_flow_id": str,
-        "since": int, "request": {...}}``. The echoed ``request`` dict
-        carries ``method``, ``url``, ``http_version``, and the final
-        headers as a list of ``[name, value]`` pairs.
+        "since": int, "request": {...}, "next_action_hint": str}``.
+        The echoed ``request`` dict carries ``method``, ``url``,
+        ``http_version``, and the final headers as a list of
+        ``[name, value]`` pairs. ``next_action_hint`` is the literal
+        string ``"fetch_response_via_intercept_flow"``.
 
         Raises :class:`ValueError` for an unknown ``flow_id``, for a
         synthetic ``tls_failed_client`` entry that has no raw flow to
@@ -671,4 +698,5 @@ class _ProxyInterceptCapabilityMixin:
                     for item in replay_flow.request.headers.items(multi=True)
                 ],
             },
+            "next_action_hint": "fetch_response_via_intercept_flow",
         }

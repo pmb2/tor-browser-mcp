@@ -248,11 +248,16 @@ def test_replay_happy_path_returns_shape() -> None:
     )
 
     assert set(result.keys()) == {
-        "replay_flow_id", "source_flow_id", "since", "request"
+        "replay_flow_id",
+        "source_flow_id",
+        "since",
+        "request",
+        "next_action_hint",
     }
     assert result["source_flow_id"] == source.id
     assert result["replay_flow_id"] != source.id
     assert isinstance(result["since"], int)
+    assert result["next_action_hint"] == "fetch_response_via_intercept_flow"
     req = result["request"]
     assert req["method"] == source.request.method
     assert req["url"] == source.request.url
@@ -456,3 +461,16 @@ def test_manager_replay_flow_rejects_when_substrate_down() -> None:
     # _loop and _master remain None, is_alive() returns False.
     with pytest.raises(ProxyInterceptError):
         mgr.replay_flow(_flow(), timeout=1.0)
+
+
+def test_replay_docstring_discloses_async_response_retrieval() -> None:
+    """The replay tool's docstring must tell callers that the inline
+    return is request-only and direct them to ``browser_intercept_flow``
+    for the response.
+    """
+
+    doc = _ProxyInterceptCapabilityMixin.browser_intercept_replay.__doc__
+    assert doc is not None
+    assert "asynchronous" in doc.lower()
+    assert "browser_intercept_flow" in doc
+    assert "replay_flow_id" in doc
