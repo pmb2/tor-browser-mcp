@@ -4,9 +4,11 @@ The substrate runs mitmproxy's ``DumpMaster`` on a daemon thread with
 its own asyncio event loop (loop B), separate from the MCP server's
 loop (loop A). The public surface is a thread-safe ``ProxyManager``
 that starts/stops the daemon, exposes a bounded buffer of serialised
-flows recorded by the inline ``FlowRecorder`` addon, and chains
-mitmproxy's upstream out through an in-tree HTTP-CONNECT-to-SOCKS5h
-adapter so all browser-originated bytes still exit via tor.
+flows recorded by the inline ``FlowRecorder`` addon, exposes a
+``MockRouter`` addon that synthesises responses for ``browser_route``
+mock-mode entries against the live flow, and chains mitmproxy's
+upstream out through an in-tree HTTP-CONNECT-to-SOCKS5h adapter so all
+browser-originated bytes still exit via tor.
 
 This module imports mitmproxy lazily inside ``ProxyManager.start`` so
 ``import torbrowser_driver`` does not depend on the optional extra.
@@ -18,9 +20,12 @@ import asyncio
 import collections
 import logging
 import queue
+import re
 import threading
 import time
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from ._proxy_intercept_socks_adapter import SocksHttpConnectAdapter
 from .exceptions import ProxyInterceptError
@@ -235,6 +240,220 @@ class FlowRecorder:
         }
 
 
+_ALL_URLS_TOKEN = "<all_urls>"
+
+_MATCH_PATTERN_SCHEMES = ("*", "http", "https", "ws", "wss", "ftp", "file")
+_MATCH_PATTERN_STAR_SCHEMES = ("http", "https", "ws", "wss", "ftp")
+
+
+@dataclass(frozen=True)
+class _ParsedPattern:
+    """Compiled match-pattern for route URL matching."""
+
+    all_urls: bool
+    scheme: str = ""
+    host: str = ""
+    path_re: re.Pattern[str] | None = None
+
+
+def _glob_to_regex(glob: str) -> re.Pattern[str]:
+    """Compile a Firefox-match-pattern path glob to an anchored regex."""
+
+    parts: list[str] = ["^"]
+    for ch in glob:
+        if ch == "*":
+            parts.append(".*")
+        else:
+            parts.append(re.escape(ch))
+    parts.append("$")
+    return re.compile("".join(parts))
+
+
+def _parse_pattern(pattern: str) -> _ParsedPattern | None:
+    """Parse the Firefox match-pattern subset accepted by ``browser_route``.
+
+    Returns ``None`` if the pattern is malformed. The accepted shapes
+    mirror the WebExtension and helper-extension validators: the
+    literal ``<all_urls>`` plus ``<scheme>://<host><path>`` with
+    ``scheme`` in ``*|http|https|ws|wss|ftp|file``, ``host`` of ``*``,
+    ``*.suffix``, a bare hostname, or empty (for ``file://``), and
+    ``path`` a glob anchored at ``/``.
+    """
+
+    if pattern == _ALL_URLS_TOKEN:
+        return _ParsedPattern(all_urls=True)
+    scheme_end = pattern.find("://")
+    if scheme_end <= 0:
+        return None
+    scheme = pattern[:scheme_end]
+    if scheme not in _MATCH_PATTERN_SCHEMES:
+        return None
+    rest = pattern[scheme_end + 3 :]
+    path_start = rest.find("/")
+    if path_start < 0:
+        return None
+    host = rest[:path_start]
+    path = rest[path_start:]
+    if scheme != "file" and host == "":
+        return None
+    return _ParsedPattern(
+        all_urls=False, scheme=scheme, host=host, path_re=_glob_to_regex(path)
+    )
+
+
+def _scheme_matches(parsed_scheme: str, url_scheme: str) -> bool:
+    if parsed_scheme == "*":
+        return url_scheme in _MATCH_PATTERN_STAR_SCHEMES
+    return parsed_scheme == url_scheme
+
+
+def _host_matches(parsed_host: str, url_host: str) -> bool:
+    if parsed_host == "*":
+        return True
+    if parsed_host == "":
+        return url_host == ""
+    if parsed_host.startswith("*."):
+        suffix = parsed_host[2:]
+        return url_host == suffix or url_host.endswith("." + suffix)
+    return parsed_host == url_host
+
+
+def _pattern_matches_url(parsed: _ParsedPattern, url: str) -> bool:
+    """Apply a parsed pattern to ``url``."""
+
+    if parsed.all_urls:
+        return any(
+            url.startswith(prefix + "://")
+            for prefix in ("http", "https", "ws", "wss", "ftp", "file")
+        )
+    try:
+        parts = urlparse(url)
+    except ValueError:
+        return False
+    if not _scheme_matches(parsed.scheme, parts.scheme):
+        return False
+    if not _host_matches(parsed.host, parts.hostname or ""):
+        return False
+    path_and_query = parts.path or "/"
+    if parts.query:
+        path_and_query = f"{path_and_query}?{parts.query}"
+    assert parsed.path_re is not None
+    return parsed.path_re.match(path_and_query) is not None
+
+
+@dataclass(frozen=True)
+class MockRoute:
+    """One installed mock-fulfill route owned by the proxy substrate.
+
+    Stored in :class:`MockRouter` keyed by ``route_id``. Insertion
+    order is preserved by Python's dict ordering; the live evaluator
+    iterates in (descending priority, ascending insertion_index) order.
+    """
+
+    route_id: str
+    pattern: str
+    parsed: _ParsedPattern
+    status: int
+    body: bytes
+    content_type: str | None
+    headers: dict[str, str] = field(default_factory=dict)
+    priority: int = 0
+    insertion_index: int = 0
+
+
+class MockRouter:
+    """mitmproxy addon that synthesises responses for matched routes.
+
+    Driver-side callers register entries via :meth:`register`. The
+    ``request`` hook runs on mitmproxy's event loop (loop B) and, for
+    the first matching entry, sets ``flow.response`` in place so the
+    browser receives the configured status / headers / body on the
+    original request URL. Routes targeting the bridge origin pass
+    through untouched -- callers do not normally install such routes,
+    but matching ``<all_urls>`` should not break the helper-bridge
+    transport.
+    """
+
+    def __init__(self) -> None:
+        self._routes: dict[str, MockRoute] = {}
+        self._lock = threading.Lock()
+
+    def register(
+        self,
+        route_id: str,
+        pattern: str,
+        status: int,
+        body: bytes,
+        content_type: str | None,
+        headers: dict[str, str] | None,
+        priority: int,
+        insertion_index: int,
+    ) -> None:
+        """Install a mock-fulfill rule keyed by ``route_id``.
+
+        Reinserting the same ``route_id`` replaces the prior entry.
+        Raises :class:`ProxyInterceptError` if ``pattern`` is malformed.
+        """
+
+        parsed = _parse_pattern(pattern)
+        if parsed is None:
+            raise ProxyInterceptError(f"invalid mock-route pattern: {pattern!r}")
+        entry = MockRoute(
+            route_id=route_id,
+            pattern=pattern,
+            parsed=parsed,
+            status=int(status),
+            body=bytes(body),
+            content_type=content_type,
+            headers=dict(headers or {}),
+            priority=int(priority),
+            insertion_index=int(insertion_index),
+        )
+        with self._lock:
+            self._routes[route_id] = entry
+
+    def unregister(self, route_id: str) -> bool:
+        """Drop ``route_id`` if present; return ``True`` when something went away."""
+
+        with self._lock:
+            return self._routes.pop(route_id, None) is not None
+
+    def route_ids(self) -> list[str]:
+        with self._lock:
+            return list(self._routes.keys())
+
+    def _ordered_snapshot(self) -> list[MockRoute]:
+        with self._lock:
+            entries = list(self._routes.values())
+        entries.sort(key=lambda r: (-r.priority, r.insertion_index))
+        return entries
+
+    def _match(self, url: str) -> MockRoute | None:
+        for entry in self._ordered_snapshot():
+            if _pattern_matches_url(entry.parsed, url):
+                return entry
+        return None
+
+    def request(self, flow: HTTPFlow) -> None:
+        from mitmproxy import http as mitm_http
+
+        request = flow.request
+        url = request.url
+        entry = self._match(url)
+        if entry is None:
+            return
+        headers: dict[str, str] = {}
+        if entry.content_type and not any(
+            k.lower() == "content-type" for k in entry.headers
+        ):
+            headers["Content-Type"] = entry.content_type
+        for name, value in entry.headers.items():
+            headers[name] = value
+        flow.response = mitm_http.Response.make(
+            entry.status, entry.body, headers
+        )
+
+
 class ProxyManager:
     """Lifecycle manager for the intercept daemon thread.
 
@@ -263,6 +482,7 @@ class ProxyManager:
         self._ca_dir = ca_dir
 
         self._recorder = FlowRecorder(max_flows)
+        self._mock_router = MockRouter()
 
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -370,6 +590,45 @@ class ProxyManager:
                     f"replay did not complete within {timeout:.1f}s"
                 )
             time.sleep(0.05)
+
+    def register_mock_route(
+        self,
+        route_id: str,
+        pattern: str,
+        status: int,
+        body: bytes,
+        content_type: str | None,
+        headers: dict[str, str] | None,
+        priority: int,
+        insertion_index: int,
+    ) -> None:
+        """Install a mock-fulfill route on the embedded ``MockRouter``.
+
+        The addon synthesises ``flow.response`` for matching requests
+        in place, so the browser receives the configured response on
+        the original URL.
+        """
+
+        self._mock_router.register(
+            route_id=route_id,
+            pattern=pattern,
+            status=status,
+            body=body,
+            content_type=content_type,
+            headers=headers,
+            priority=priority,
+            insertion_index=insertion_index,
+        )
+
+    def unregister_mock_route(self, route_id: str) -> bool:
+        """Drop the named mock route; return ``True`` if it existed."""
+
+        return self._mock_router.unregister(route_id)
+
+    def mock_route_ids(self) -> list[str]:
+        """Return the route_ids currently installed on the mock router."""
+
+        return self._mock_router.route_ids()
 
     def clear_buffer(self) -> int:
         """Empty the recorder buffer; return the count of evicted entries.
@@ -516,7 +775,7 @@ class ProxyManager:
             self._adapter = adapter
 
             master = self._build_master(adapter.actual_port)
-            master.addons.add(self._recorder)
+            master.addons.add(self._mock_router, self._recorder)
             self._master = master
         except BaseException as exc:
             self._start_error = exc

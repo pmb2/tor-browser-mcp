@@ -103,9 +103,9 @@ const addonId = arguments[0];
 # at position 0 and rewrites every page-principal proxy lookup -- even
 # loopback addresses already exempted by ``network.proxy.no_proxies_on``
 # -- to a SOCKS entry so each first-party domain gets its own tor
-# circuit. Page-context fetch to the bridge's localhost ``/mock/<id>``
-# endpoint therefore goes through SOCKS, which refuses loopback
-# destinations, and the fetch surfaces as a network error.
+# circuit. Page-context fetch into the bridge's localhost endpoints
+# (e.g. ``/host``) therefore goes through SOCKS, which refuses
+# loopback destinations, and the fetch surfaces as a network error.
 #
 # The fix: install a second proxy filter at position 100 (runs *after*
 # TorDomainIsolator) that overrides the SOCKS rewrite back to direct

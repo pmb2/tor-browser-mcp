@@ -1,10 +1,11 @@
 """Unit tests for the helper-extension active primitives.
 
-Covers the driver-side route table, mock registration against the
-bridge, the ``browser_route`` / ``browser_unroute`` /
+Covers the driver-side route table, mock fulfillment on the
+proxy-intercept substrate, the ``browser_route`` / ``browser_unroute`` /
 ``browser_route_list`` surface, and ``browser_network_state_set``.
 Everything runs against a fake bridge that records outgoing requests
-and mock registrations; no Firefox is launched.
+and a fake proxy manager that records mock-route registrations; no
+Firefox is launched.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from torbrowser_driver._helper_extension_primitives import (
     _HelperExtensionCapabilityMixin,
     _resolve_route_mode,
 )
-from torbrowser_driver.exceptions import HelperUnavailable
+from torbrowser_driver.exceptions import HelperUnavailable, ProxyInterceptError
 
 
 class _FakeBridge:
@@ -31,8 +32,6 @@ class _FakeBridge:
         self.host = "127.0.0.1"
         self.port = 9999
         self.calls: list[tuple[str, dict[str, Any]]] = []
-        self.mocks: dict[str, dict[str, Any]] = {}
-        self.mock_log: list[tuple[str, str, dict[str, Any]]] = []
 
     def request(self, method: str, params: dict[str, Any] | None = None, timeout: float = 30.0):
         self.calls.append((method, dict(params or {})))
@@ -41,85 +40,91 @@ class _FakeBridge:
     def subscribe(self, name: str, sink) -> None:  # pragma: no cover - unused here
         return None
 
-    def register_mock(
+
+class _FakeProxyManager:
+    def __init__(self, alive: bool = True) -> None:
+        self._alive = alive
+        self.mocks: dict[str, dict[str, Any]] = {}
+        self.mock_log: list[tuple[str, str, dict[str, Any]]] = []
+
+    def is_alive(self) -> bool:
+        return self._alive
+
+    def register_mock_route(
         self,
+        *,
         route_id: str,
+        pattern: str,
         status: int,
-        headers: dict[str, str] | None,
         body: bytes,
+        content_type: str | None,
+        headers: dict[str, str] | None,
+        priority: int,
+        insertion_index: int,
     ) -> None:
         entry = {
+            "pattern": pattern,
             "status": int(status),
-            "headers": dict(headers or {}),
             "body": bytes(body),
+            "content_type": content_type,
+            "headers": dict(headers or {}),
+            "priority": int(priority),
+            "insertion_index": int(insertion_index),
         }
         self.mocks[route_id] = entry
         self.mock_log.append(("register", route_id, entry))
 
-    def unregister_mock(self, route_id: str) -> None:
-        self.mocks.pop(route_id, None)
+    def unregister_mock_route(self, route_id: str) -> bool:
+        existed = self.mocks.pop(route_id, None) is not None
         self.mock_log.append(("unregister", route_id, {}))
+        return existed
 
 
 class _Driver(_HelperExtensionCapabilityMixin):
-    def __init__(self, bridge: _FakeBridge | None) -> None:
+    def __init__(
+        self,
+        bridge: _FakeBridge | None,
+        proxy_manager: _FakeProxyManager | None = None,
+    ) -> None:
         self._helper_bridge = bridge
         self._helper_addon_id = "helper@tor-browser-mcp.local"
+        self._proxy_manager = proxy_manager
+
+
+def _drv_with_mock_support(
+    bridge: _FakeBridge | None = None,
+    proxy: _FakeProxyManager | None = None,
+) -> _Driver:
+    """Construct a driver wired up with a proxy manager for mock-mode."""
+
+    return _Driver(
+        bridge=bridge if bridge is not None else _FakeBridge(),
+        proxy_manager=proxy if proxy is not None else _FakeProxyManager(),
+    )
 
 
 _ROUTE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
-# --- _register_mock_on_bridge ------------------------------------------------
+# --- _proxy_manager_for_mock_or_raise ---------------------------------------
 
 
-def test_register_mock_on_bridge_returns_bridge_url_and_records_entry() -> None:
-    bridge = _FakeBridge()
-    drv = _Driver(bridge=bridge)
-    url = drv._register_mock_on_bridge(
-        "abc123",
-        200,
-        "hello",
-        "text/plain",
-        None,
-    )
-    assert url == "http://127.0.0.1:9999/mock/abc123"
-    assert bridge.mocks["abc123"] == {
-        "status": 200,
-        "headers": {"Content-Type": "text/plain"},
-        "body": b"hello",
-    }
+def test_proxy_manager_for_mock_or_raise_returns_live_manager() -> None:
+    proxy = _FakeProxyManager()
+    drv = _drv_with_mock_support(proxy=proxy)
+    assert drv._proxy_manager_for_mock_or_raise() is proxy
 
 
-def test_register_mock_on_bridge_preserves_explicit_content_type() -> None:
-    bridge = _FakeBridge()
-    drv = _Driver(bridge=bridge)
-    drv._register_mock_on_bridge(
-        "abc",
-        201,
-        '{"a":1}',
-        "text/plain",
-        {"Content-Type": "application/json", "X-Foo": "bar"},
-    )
-    entry = bridge.mocks["abc"]
-    # Explicit Content-Type wins over the content_type kwarg.
-    assert entry["headers"]["Content-Type"] == "application/json"
-    assert entry["headers"]["X-Foo"] == "bar"
+def test_proxy_manager_for_mock_or_raise_when_absent() -> None:
+    drv = _Driver(bridge=_FakeBridge(), proxy_manager=None)
+    with pytest.raises(ProxyInterceptError, match="proxy-intercept"):
+        drv._proxy_manager_for_mock_or_raise()
 
 
-def test_register_mock_on_bridge_encodes_string_body_as_utf8() -> None:
-    bridge = _FakeBridge()
-    drv = _Driver(bridge=bridge)
-    drv._register_mock_on_bridge("r", 200, "snow \u2603", "text/plain", None)
-    assert bridge.mocks["r"]["body"] == "snow \u2603".encode("utf-8")
-
-
-def test_register_mock_on_bridge_accepts_bytes_body_verbatim() -> None:
-    bridge = _FakeBridge()
-    drv = _Driver(bridge=bridge)
-    payload = bytes(range(256))
-    drv._register_mock_on_bridge("r", 200, payload, None, None)
-    assert bridge.mocks["r"]["body"] == payload
+def test_proxy_manager_for_mock_or_raise_when_dead() -> None:
+    drv = _drv_with_mock_support(proxy=_FakeProxyManager(alive=False))
+    with pytest.raises(ProxyInterceptError, match="proxy-intercept"):
+        drv._proxy_manager_for_mock_or_raise()
 
 
 # --- mode resolution --------------------------------------------------------
@@ -179,31 +184,37 @@ def test_resolve_route_mode_redirect_plus_headers_raises() -> None:
 
 
 def test_route_rejects_invalid_match_pattern() -> None:
-    drv = _Driver(bridge=_FakeBridge())
+    drv = _drv_with_mock_support()
     with pytest.raises(ValueError, match="match pattern"):
         drv.browser_route("not-a-pattern", body="x")
 
 
 def test_route_raises_when_bridge_missing() -> None:
-    drv = _Driver(bridge=None)
+    drv = _Driver(bridge=None, proxy_manager=_FakeProxyManager())
     with pytest.raises(HelperUnavailable):
         drv.browser_route("*://example.com/*", body="x")
 
 
+def test_route_mock_raises_when_proxy_intercept_disabled() -> None:
+    drv = _Driver(bridge=_FakeBridge(), proxy_manager=None)
+    with pytest.raises(ProxyInterceptError, match="proxy-intercept"):
+        drv.browser_route("*://example.com/*", body="x")
+
+
 def test_route_mode_mutual_exclusion_mock_redirect() -> None:
-    drv = _Driver(bridge=_FakeBridge())
+    drv = _drv_with_mock_support()
     with pytest.raises(ValueError, match="mutually exclusive"):
         drv.browser_route("*://e/*", body="x", redirect_url="https://e/")
 
 
 def test_route_mode_mutual_exclusion_mock_headers() -> None:
-    drv = _Driver(bridge=_FakeBridge())
+    drv = _drv_with_mock_support()
     with pytest.raises(ValueError, match="mutually exclusive"):
         drv.browser_route("*://e/*", body="x", set_request_headers={"X": "1"})
 
 
 def test_route_mode_mutual_exclusion_redirect_headers() -> None:
-    drv = _Driver(bridge=_FakeBridge())
+    drv = _drv_with_mock_support()
     with pytest.raises(ValueError, match="mutually exclusive"):
         drv.browser_route(
             "*://e/*",
@@ -213,13 +224,13 @@ def test_route_mode_mutual_exclusion_redirect_headers() -> None:
 
 
 def test_route_redirect_url_rejects_non_http_scheme() -> None:
-    drv = _Driver(bridge=_FakeBridge())
+    drv = _drv_with_mock_support()
     with pytest.raises(ValueError, match="absolute http"):
         drv.browser_route("*://e/*", redirect_url="file:///etc/passwd")
 
 
 def test_route_requires_a_mode() -> None:
-    drv = _Driver(bridge=_FakeBridge())
+    drv = _drv_with_mock_support()
     with pytest.raises(ValueError, match="one of"):
         drv.browser_route("*://e/*")
 
@@ -227,9 +238,10 @@ def test_route_requires_a_mode() -> None:
 # --- browser_route add/list/remove round-trip -------------------------------
 
 
-def test_route_add_mock_sends_redirect_mode_pointing_at_bridge() -> None:
+def test_route_add_mock_registers_on_proxy_substrate_only() -> None:
     bridge = _FakeBridge()
-    drv = _Driver(bridge=bridge)
+    proxy = _FakeProxyManager()
+    drv = _Driver(bridge=bridge, proxy_manager=proxy)
     result = drv.browser_route(
         "*://example.com/*",
         status=200,
@@ -238,30 +250,27 @@ def test_route_add_mock_sends_redirect_mode_pointing_at_bridge() -> None:
     )
     route_id = result["route_id"]
     assert _ROUTE_ID_RE.match(route_id), route_id
-    method, params = bridge.calls[-1]
-    assert method == "route.add"
-    # The extension only ever sees redirect-mode; mock-mode is a
-    # driver-side label that collapses to a bridge-served redirect.
-    assert params["mode"] == "redirect"
-    assert params["pattern"] == "*://example.com/*"
-    assert params["redirect_url"] == f"http://127.0.0.1:9999/mock/{route_id}"
-    assert bridge.mocks[route_id]["status"] == 200
-    assert bridge.mocks[route_id]["body"] == b"ok"
-    assert bridge.mocks[route_id]["headers"]["Content-Type"] == "text/plain"
+    # The WebExtension must not see mock-mode routes at all.
+    assert bridge.calls == []
+    entry = proxy.mocks[route_id]
+    assert entry["pattern"] == "*://example.com/*"
+    assert entry["status"] == 200
+    assert entry["body"] == b"ok"
+    assert entry["content_type"] == "text/plain"
 
 
 def test_route_add_redirect_passes_url_through() -> None:
-    bridge = _FakeBridge()
-    drv = _Driver(bridge=bridge)
+    drv = _drv_with_mock_support()
     drv.browser_route("*://example.com/*", redirect_url="https://other/")
+    bridge = drv._helper_bridge
+    assert bridge is not None
     _, params = bridge.calls[-1]
     assert params["mode"] == "redirect"
     assert params["redirect_url"] == "https://other/"
 
 
 def test_route_add_headers_passes_edit_lists() -> None:
-    bridge = _FakeBridge()
-    drv = _Driver(bridge=bridge)
+    drv = _drv_with_mock_support()
     drv.browser_route(
         "*://example.com/*",
         set_request_headers={"X-Req": "1"},
@@ -269,6 +278,8 @@ def test_route_add_headers_passes_edit_lists() -> None:
         set_response_headers={"X-Resp": "2"},
         remove_response_headers=["X-Strip"],
     )
+    bridge = drv._helper_bridge
+    assert bridge is not None
     _, params = bridge.calls[-1]
     assert params["mode"] == "headers"
     assert params["set_request_headers"] == {"X-Req": "1"}
@@ -277,8 +288,25 @@ def test_route_add_headers_passes_edit_lists() -> None:
     assert params["remove_response_headers"] == ["X-Strip"]
 
 
+def test_route_add_mock_headers_passed_to_proxy() -> None:
+    proxy = _FakeProxyManager()
+    drv = _drv_with_mock_support(proxy=proxy)
+    result = drv.browser_route(
+        "*://m/*",
+        status=418,
+        body="hello",
+        content_type="text/plain",
+        headers={"X-Test": "yes"},
+    )
+    entry = proxy.mocks[result["route_id"]]
+    assert entry["status"] == 418
+    assert entry["body"] == b"hello"
+    assert entry["content_type"] == "text/plain"
+    assert entry["headers"] == {"X-Test": "yes"}
+
+
 def test_route_list_echoes_mode_specific_fields() -> None:
-    drv = _Driver(bridge=_FakeBridge())
+    drv = _drv_with_mock_support()
     drv.browser_route(
         "*://m/*",
         status=418,
@@ -304,8 +332,8 @@ def test_route_list_echoes_mode_specific_fields() -> None:
     assert mock_entry["content_type"] == "text/plain"
     assert mock_entry["body_size"] == len(b"hello")
     assert mock_entry["headers"] == {"X-Test": "yes"}
-    # The bridge URL is a driver-internal implementation detail and
-    # must not surface in browser_route_list output.
+    # Mock entries are fulfilled inline on the proxy substrate and have
+    # no redirect target to surface.
     assert mock_entry["redirect_url"] is None
 
     redirect_entry = by_pattern["*://r/*"]
@@ -321,7 +349,7 @@ def test_route_list_echoes_mode_specific_fields() -> None:
 
 
 def test_route_list_orders_by_priority_then_insertion() -> None:
-    drv = _Driver(bridge=_FakeBridge())
+    drv = _drv_with_mock_support()
     r_low = drv.browser_route("*://a/*", body="a", priority=1)["route_id"]
     r_high1 = drv.browser_route("*://b/*", body="b", priority=10)["route_id"]
     r_default = drv.browser_route("*://c/*", body="c")["route_id"]
@@ -334,13 +362,14 @@ def test_route_list_orders_by_priority_then_insertion() -> None:
     assert ids == [r_high1, r_high2, r_low, r_default]
 
 
-def test_unroute_by_route_id_returns_one() -> None:
+def test_unroute_by_route_id_returns_one_for_mock() -> None:
     bridge = _FakeBridge()
-    drv = _Driver(bridge=bridge)
+    proxy = _FakeProxyManager()
+    drv = _Driver(bridge=bridge, proxy_manager=proxy)
     rid = drv.browser_route("*://example.com/*", body="x")["route_id"]
-    assert rid in bridge.mocks
+    assert rid in proxy.mocks
     bridge.calls.clear()
-    bridge.mock_log.clear()
+    proxy.mock_log.clear()
 
     result = drv.browser_unroute(route_id=rid)
     assert result == {"removed": 1}
@@ -350,51 +379,88 @@ def test_unroute_by_route_id_returns_one() -> None:
         "total": 0,
         "truncated": False,
     }
+    # Mock removal goes through the proxy substrate; the extension
+    # never knew about this route and must not receive a remove call.
+    assert bridge.calls == []
+    assert rid not in proxy.mocks
+    assert any(op == "unregister" and r == rid for op, r, _ in proxy.mock_log)
+
+
+def test_unroute_by_route_id_returns_one_for_redirect() -> None:
+    bridge = _FakeBridge()
+    drv = _Driver(bridge=bridge, proxy_manager=_FakeProxyManager())
+    rid = drv.browser_route("*://example.com/*", redirect_url="https://e/")[
+        "route_id"
+    ]
+    bridge.calls.clear()
+
+    result = drv.browser_unroute(route_id=rid)
+    assert result == {"removed": 1}
     method, params = bridge.calls[-1]
     assert method == "route.remove"
     assert params["route_ids"] == [rid]
-    assert rid not in bridge.mocks
-    assert any(op == "unregister" and r == rid for op, r, _ in bridge.mock_log)
 
 
 def test_unroute_by_route_id_unknown_returns_zero() -> None:
-    drv = _Driver(bridge=_FakeBridge())
+    drv = _drv_with_mock_support()
     assert drv.browser_unroute(route_id="missing") == {"removed": 0}
 
 
 def test_unroute_by_pattern_removes_all_matching() -> None:
     bridge = _FakeBridge()
-    drv = _Driver(bridge=bridge)
+    proxy = _FakeProxyManager()
+    drv = _Driver(bridge=bridge, proxy_manager=proxy)
     rid_a = drv.browser_route("*://example.com/*", body="a")["route_id"]
     rid_b = drv.browser_route("*://example.com/*", body="b", priority=5)["route_id"]
     rid_c = drv.browser_route("*://other.com/*", body="c")["route_id"]
     bridge.calls.clear()
-    bridge.mock_log.clear()
+    proxy.mock_log.clear()
 
     result = drv.browser_unroute(pattern="*://example.com/*")
     assert result == {"removed": 2}
     remaining = drv.browser_route_list()["routes"]
     assert len(remaining) == 1
     assert remaining[0]["pattern"] == "*://other.com/*"
+    # All three were mock-mode, so the bridge sees no remove calls.
+    assert bridge.calls == []
+    assert rid_a not in proxy.mocks
+    assert rid_b not in proxy.mocks
+    assert rid_c in proxy.mocks
+
+
+def test_unroute_by_pattern_splits_modes_correctly() -> None:
+    bridge = _FakeBridge()
+    proxy = _FakeProxyManager()
+    drv = _Driver(bridge=bridge, proxy_manager=proxy)
+    rid_mock = drv.browser_route("*://example.com/*", body="a")["route_id"]
+    rid_redirect = drv.browser_route(
+        "*://example.com/*", redirect_url="https://r/"
+    )["route_id"]
+    bridge.calls.clear()
+    proxy.mock_log.clear()
+
+    result = drv.browser_unroute(pattern="*://example.com/*")
+    assert result == {"removed": 2}
+    # The redirect entry goes through the extension; the mock entry
+    # is dropped from the proxy substrate directly.
     method, params = bridge.calls[-1]
     assert method == "route.remove"
-    assert set(params["route_ids"]) == {rid_a, rid_b}
-    assert rid_a not in bridge.mocks
-    assert rid_b not in bridge.mocks
-    assert rid_c in bridge.mocks
+    assert params["route_ids"] == [rid_redirect]
+    assert rid_mock not in proxy.mocks
 
 
 def test_unroute_by_pattern_no_match_returns_zero_and_no_call() -> None:
-    bridge = _FakeBridge()
-    drv = _Driver(bridge=bridge)
+    drv = _drv_with_mock_support()
     drv.browser_route("*://example.com/*", body="a")
+    bridge = drv._helper_bridge
+    assert bridge is not None
     bridge.calls.clear()
     assert drv.browser_unroute(pattern="*://nope/*") == {"removed": 0}
     assert bridge.calls == []
 
 
 def test_unroute_requires_exactly_one_argument() -> None:
-    drv = _Driver(bridge=_FakeBridge())
+    drv = _drv_with_mock_support()
     with pytest.raises(ValueError, match="exactly one"):
         drv.browser_unroute()
     with pytest.raises(ValueError, match="exactly one"):
@@ -402,13 +468,13 @@ def test_unroute_requires_exactly_one_argument() -> None:
 
 
 def test_unroute_raises_when_bridge_missing() -> None:
-    drv = _Driver(bridge=None)
+    drv = _Driver(bridge=None, proxy_manager=_FakeProxyManager())
     with pytest.raises(HelperUnavailable):
         drv.browser_unroute(route_id="r")
 
 
 def test_route_list_empty_when_no_routes() -> None:
-    drv = _Driver(bridge=_FakeBridge())
+    drv = _drv_with_mock_support()
     assert drv.browser_route_list() == {
         "routes": [],
         "count": 0,
@@ -418,7 +484,7 @@ def test_route_list_empty_when_no_routes() -> None:
 
 
 def test_route_list_limit_and_file_output(tmp_path: Path) -> None:
-    drv = _Driver(bridge=_FakeBridge())
+    drv = _drv_with_mock_support()
     drv.config = SimpleNamespace(
         path_policy=PathPolicy.from_config(output_dir=tmp_path / "out")
     )

@@ -29,12 +29,13 @@ from urllib.parse import urlparse
 
 from ._primitive_helpers import _validate_limit
 from .capabilities import capability
-from .exceptions import HelperUnavailable
+from .exceptions import HelperUnavailable, ProxyInterceptError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ._helper_extension_bridge import HelperBridge
+    from ._proxy_intercept_substrate import ProxyManager
     from .config import DriverConfig
 
 
@@ -163,10 +164,7 @@ class _RouteEntry:
         """Render as a JSON-safe descriptor for ``browser_route_list``.
 
         Mock-mode bodies are not echoed verbatim; ``body_size`` is
-        surfaced instead to keep tool output bounded. ``redirect_url``
-        on a mock entry is omitted -- the driver-internal value points
-        at the bridge's localhost ``/mock/<id>`` URL, which is an
-        implementation detail callers should not see.
+        surfaced instead to keep tool output bounded.
         """
 
         body_size = len(self.body.encode("utf-8")) if self.body is not None else None
@@ -198,25 +196,21 @@ class _RouteEntry:
     def to_extension_payload(self) -> dict[str, Any]:
         """Serialise the route descriptor for the background page.
 
-        The extension only ever sees three concrete shapes: redirect,
-        header-rewrite, and offline. Mock-mode routes are projected
-        into ``"redirect"`` mode pointing at the bridge's ``/mock/<id>``
-        endpoint -- the bridge serves the mock body over HTTP from
-        localhost, which is reachable from page context and not
-        subject to the ``data:``-URL deliverability gap that affects
-        Firefox 140 ESR. The driver-side ``mode`` field stays
-        ``"mock"`` for echo purposes only.
+        Only ``redirect`` and ``headers`` modes reach the extension;
+        ``mock`` mode is fulfilled inline on the proxy-intercept
+        substrate and never appears on the WebExtension side.
         """
 
-        extension_mode = "redirect" if self.mode == "mock" else self.mode
+        if self.mode == "mock":
+            raise AssertionError("mock-mode routes are not sent to the extension")
         payload: dict[str, Any] = {
             "route_id": self.route_id,
             "pattern": self.pattern,
-            "mode": extension_mode,
+            "mode": self.mode,
             "priority": self.priority,
             "insertion_index": self.insertion_index,
         }
-        if self.mode in ("mock", "redirect"):
+        if self.mode == "redirect":
             payload["redirect_url"] = self.redirect_url
         else:
             payload["set_request_headers"] = (
@@ -605,6 +599,7 @@ class _HelperExtensionCapabilityMixin:
         _helper_routes: dict[str, _RouteEntry]
         _helper_route_counter: itertools.count[int]
         _helper_network_state: str
+        _proxy_manager: ProxyManager | None
         config: DriverConfig
 
     def _helper_bridge_or_raise(self) -> HelperBridge:
@@ -651,30 +646,23 @@ class _HelperExtensionCapabilityMixin:
             key=lambda r: (-r.priority, r.insertion_index),
         )
 
-    def _register_mock_on_bridge(
-        self,
-        route_id: str,
-        status: int,
-        body: str | bytes,
-        content_type: str | None,
-        headers: dict[str, str] | None,
-    ) -> str:
-        """Publish a mock entry on the bridge and return its URL.
+    def _proxy_manager_for_mock_or_raise(self) -> ProxyManager:
+        """Return the live :class:`ProxyManager` or raise ``ProxyInterceptError``.
 
-        The bridge serves ``/mock/<route_id>`` unauthenticated; the
-        route_id's entropy is the access control. The returned URL is
-        what the extension is told to redirect matching requests to.
+        Mock-mode fulfillment is synthesised on the intercept substrate
+        so the browser sees the response on the original request URL.
+        Without ``proxy-intercept`` enabled there is no place to
+        synthesise a response without rewriting the navigation target,
+        so the call fails up front.
         """
 
-        body_bytes = body.encode("utf-8") if isinstance(body, str) else bytes(body)
-        headers_out: dict[str, str] = dict(headers or {})
-        if content_type and not any(
-            k.lower() == "content-type" for k in headers_out
-        ):
-            headers_out["Content-Type"] = content_type
-        bridge = self._helper_bridge_or_raise()
-        bridge.register_mock(route_id, int(status), headers_out, body_bytes)
-        return f"http://{bridge.host}:{bridge.port}/mock/{route_id}"
+        manager = getattr(self, "_proxy_manager", None)
+        if manager is None or not manager.is_alive():
+            raise ProxyInterceptError(
+                "browser_route mock mode (body=...) requires the "
+                "'proxy-intercept' capability to be enabled"
+            )
+        return manager
 
     def _ensure_event_subscribers(self, bridge: HelperBridge) -> None:
         if getattr(self, "_helper_subscribers_installed", False):
@@ -994,18 +982,14 @@ class _HelperExtensionCapabilityMixin:
 
         Modes are mutually exclusive; exactly one must be selected:
 
-        * **Mock** -- ``body`` is set. The extension answers matching
-          requests by returning ``redirectUrl`` pointing at the
-          driver-side bridge's localhost ``/mock/<route_id>`` endpoint,
-          which serves ``body`` with the supplied ``status``,
-          ``content_type``, and ``headers``. Arbitrary status codes
-          and response headers are supported; the page observes the
-          response as if the origin had returned it. The mock body
-          travels over loopback, never through tor, and never reaches
-          ``proxy-intercept``'s flow buffer -- mocks are local-only.
-          ``proxy-intercept`` is only needed for mocking traffic the
-          helper extension cannot see (document-parser subresources,
-          WebSocket frames).
+        * **Mock** -- ``body`` is set. Fulfilled inline on the
+          ``proxy-intercept`` substrate: the embedded mitmproxy addon
+          synthesises ``flow.response`` for matching requests on the
+          original URL, so ``window.location`` and the URL bar stay on
+          the pattern's target (Playwright ``page.route().fulfill()``
+          semantics). Arbitrary status codes and response headers are
+          supported. Requires the ``proxy-intercept`` capability to be
+          enabled; raises :class:`ProxyInterceptError` otherwise.
         * **Redirect** -- ``redirect_url`` is set. The blocking
           ``onBeforeRequest`` listener returns ``{redirectUrl: ...}``.
           Works end-to-end against ``http(s)://`` targets.
@@ -1056,26 +1040,32 @@ class _HelperExtensionCapabilityMixin:
 
         bridge = self._helper_bridge_or_raise()
         route_id = uuid.uuid4().hex
-        bridge_redirect_url: str | None = None
+        insertion_index = next(self._route_counter())
         if mode == "mock":
             assert isinstance(body, str)
-            bridge_redirect_url = self._register_mock_on_bridge(
-                route_id, status, body, content_type, headers
+            manager = self._proxy_manager_for_mock_or_raise()
+            body_bytes = body.encode("utf-8")
+            manager.register_mock_route(
+                route_id=route_id,
+                pattern=pattern,
+                status=status,
+                body=body_bytes,
+                content_type=content_type,
+                headers=dict(headers) if headers else None,
+                priority=resolved_priority,
+                insertion_index=insertion_index,
             )
         entry = _RouteEntry(
             route_id=route_id,
             pattern=pattern,
             mode=mode,
             priority=resolved_priority,
-            insertion_index=next(self._route_counter()),
+            insertion_index=insertion_index,
             status=status if mode == "mock" else None,
             body=body if mode == "mock" else None,
             content_type=content_type if mode == "mock" else None,
             headers=(dict(headers) if headers and mode == "mock" else None),
-            redirect_url=(
-                bridge_redirect_url if mode == "mock"
-                else (redirect_url if mode == "redirect" else None)
-            ),
+            redirect_url=redirect_url if mode == "redirect" else None,
             set_request_headers=(
                 dict(set_request_headers) if set_request_headers else None
             ),
@@ -1091,12 +1081,12 @@ class _HelperExtensionCapabilityMixin:
         )
         routes = self._routes_map()
         routes[route_id] = entry
+        if mode == "mock":
+            return {"route_id": route_id}
         try:
             bridge.request("route.add", entry.to_extension_payload())
         except Exception:
             routes.pop(route_id, None)
-            if mode == "mock":
-                bridge.unregister_mock(route_id)
             raise
         return {"route_id": route_id}
 
@@ -1110,7 +1100,9 @@ class _HelperExtensionCapabilityMixin:
 
         Exactly one of ``route_id`` or ``pattern`` must be supplied; the
         former removes a single route, the latter removes every route
-        whose pattern matches ``pattern`` byte-for-byte. Returns
+        whose pattern matches ``pattern`` byte-for-byte. Mock-mode
+        entries are dropped from the proxy-intercept substrate; the
+        other modes are dropped from the helper extension. Returns
         ``{"removed": int}`` with the count of routes actually dropped.
         """
 
@@ -1119,25 +1111,33 @@ class _HelperExtensionCapabilityMixin:
                 "browser_unroute requires exactly one of route_id or pattern"
             )
         bridge = self._helper_bridge_or_raise()
+        manager = getattr(self, "_proxy_manager", None)
         routes = self._routes_map()
         if route_id is not None:
             entry = routes.pop(route_id, None)
             if entry is None:
                 return {"removed": 0}
             if entry.mode == "mock":
-                bridge.unregister_mock(route_id)
+                if manager is not None:
+                    manager.unregister_mock_route(route_id)
+                return {"removed": 1}
             bridge.request("route.remove", {"route_ids": [route_id]})
             return {"removed": 1}
-        victims = [rid for rid, r in routes.items() if r.pattern == pattern]
-        victim_modes = [routes[rid].mode for rid in victims]
-        for rid in victims:
+        victim_modes: dict[str, str] = {
+            rid: r.mode for rid, r in routes.items() if r.pattern == pattern
+        }
+        for rid in victim_modes:
             routes.pop(rid, None)
-        for rid, victim_mode in zip(victims, victim_modes, strict=True):
+        extension_victims: list[str] = []
+        for rid, victim_mode in victim_modes.items():
             if victim_mode == "mock":
-                bridge.unregister_mock(rid)
-        if victims:
-            bridge.request("route.remove", {"route_ids": victims})
-        return {"removed": len(victims)}
+                if manager is not None:
+                    manager.unregister_mock_route(rid)
+            else:
+                extension_victims.append(rid)
+        if extension_victims:
+            bridge.request("route.remove", {"route_ids": extension_victims})
+        return {"removed": len(victim_modes)}
 
     @capability("helper-extension")
     def browser_route_list(

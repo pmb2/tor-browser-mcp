@@ -17,7 +17,10 @@ import pytest
 
 from torbrowser_driver._proxy_intercept_substrate import (
     FlowRecorder,
+    MockRouter,
     ProxyManager,
+    _parse_pattern,
+    _pattern_matches_url,
 )
 from torbrowser_driver.exceptions import ProxyInterceptError
 
@@ -345,3 +348,207 @@ def test_tls_failed_client_appends_synthetic_entry() -> None:
 def test_recorder_max_flows_validates() -> None:
     with pytest.raises(ProxyInterceptError):
         FlowRecorder(max_flows=0)
+
+
+# ---------------------------------------------------------------------------
+# MockRouter pattern matching and response synthesis.
+# ---------------------------------------------------------------------------
+
+
+def _flow_with_url(url: str):
+    from mitmproxy.test import tflow
+
+    flow = tflow.tflow()
+    flow.request.url = url
+    return flow
+
+
+@pytest.mark.parametrize(
+    ("pattern", "url"),
+    [
+        ("<all_urls>", "https://example.com/foo"),
+        ("*://example.com/*", "https://example.com/path"),
+        ("*://example.com/*", "http://example.com/"),
+        ("https://example.com/*", "https://example.com/anything"),
+        ("https://*.example.com/*", "https://api.example.com/v1"),
+        ("https://*.example.com/*", "https://example.com/v1"),
+        ("https://example.com/api/*", "https://example.com/api/v1?q=1"),
+        ("*://example.com/test?id=*", "http://example.com/test?id=42"),
+    ],
+)
+def test_pattern_matches_positive(pattern: str, url: str) -> None:
+    parsed = _parse_pattern(pattern)
+    assert parsed is not None
+    assert _pattern_matches_url(parsed, url)
+
+
+@pytest.mark.parametrize(
+    ("pattern", "url"),
+    [
+        ("https://example.com/*", "http://example.com/"),
+        ("*://example.com/*", "https://other.com/path"),
+        ("https://*.example.com/*", "https://example.org/"),
+        ("https://example.com/api/*", "https://example.com/other"),
+    ],
+)
+def test_pattern_matches_negative(pattern: str, url: str) -> None:
+    parsed = _parse_pattern(pattern)
+    assert parsed is not None
+    assert not _pattern_matches_url(parsed, url)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["not-a-pattern", "://no-scheme/", "https://", "bogus://example.com/"],
+)
+def test_pattern_parse_rejects_malformed(pattern: str) -> None:
+    assert _parse_pattern(pattern) is None
+
+
+def test_mock_router_synthesises_response_on_matched_request() -> None:
+    router = MockRouter()
+    router.register(
+        route_id="r1",
+        pattern="*://example.com/*",
+        status=418,
+        body=b"teapot",
+        content_type="text/plain",
+        headers={"X-Mock": "yes"},
+        priority=0,
+        insertion_index=0,
+    )
+    flow = _flow_with_url("https://example.com/test")
+    router.request(flow)
+
+    response = flow.response
+    assert response is not None
+    assert response.status_code == 418
+    assert response.content == b"teapot"
+    assert response.headers["Content-Type"] == "text/plain"
+    assert response.headers["X-Mock"] == "yes"
+
+
+def test_mock_router_leaves_unmatched_request_untouched() -> None:
+    router = MockRouter()
+    router.register(
+        route_id="r1",
+        pattern="*://example.com/*",
+        status=200,
+        body=b"ok",
+        content_type="text/plain",
+        headers=None,
+        priority=0,
+        insertion_index=0,
+    )
+    flow = _flow_with_url("https://other.com/")
+    router.request(flow)
+    assert flow.response is None
+
+
+def test_mock_router_higher_priority_wins() -> None:
+    router = MockRouter()
+    router.register(
+        route_id="low",
+        pattern="*://example.com/*",
+        status=200,
+        body=b"low",
+        content_type="text/plain",
+        headers=None,
+        priority=0,
+        insertion_index=0,
+    )
+    router.register(
+        route_id="high",
+        pattern="*://example.com/*",
+        status=200,
+        body=b"high",
+        content_type="text/plain",
+        headers=None,
+        priority=10,
+        insertion_index=1,
+    )
+    flow = _flow_with_url("https://example.com/")
+    router.request(flow)
+    assert flow.response is not None
+    assert flow.response.content == b"high"
+
+
+def test_mock_router_insertion_order_breaks_priority_ties() -> None:
+    router = MockRouter()
+    router.register(
+        route_id="first",
+        pattern="*://example.com/*",
+        status=200,
+        body=b"first",
+        content_type="text/plain",
+        headers=None,
+        priority=5,
+        insertion_index=0,
+    )
+    router.register(
+        route_id="second",
+        pattern="*://example.com/*",
+        status=200,
+        body=b"second",
+        content_type="text/plain",
+        headers=None,
+        priority=5,
+        insertion_index=1,
+    )
+    flow = _flow_with_url("https://example.com/")
+    router.request(flow)
+    assert flow.response is not None
+    assert flow.response.content == b"first"
+
+
+def test_mock_router_explicit_content_type_header_wins() -> None:
+    router = MockRouter()
+    router.register(
+        route_id="r1",
+        pattern="*://example.com/*",
+        status=200,
+        body=b'{"a":1}',
+        content_type="text/plain",
+        headers={"Content-Type": "application/json"},
+        priority=0,
+        insertion_index=0,
+    )
+    flow = _flow_with_url("https://example.com/")
+    router.request(flow)
+    assert flow.response is not None
+    assert flow.response.headers["Content-Type"] == "application/json"
+
+
+def test_mock_router_unregister_drops_entry() -> None:
+    router = MockRouter()
+    router.register(
+        route_id="r1",
+        pattern="*://example.com/*",
+        status=200,
+        body=b"x",
+        content_type="text/plain",
+        headers=None,
+        priority=0,
+        insertion_index=0,
+    )
+    assert router.unregister("r1") is True
+    assert router.unregister("r1") is False
+
+    flow = _flow_with_url("https://example.com/")
+    router.request(flow)
+    assert flow.response is None
+
+
+def test_mock_router_register_with_invalid_pattern_raises() -> None:
+    router = MockRouter()
+    with pytest.raises(ProxyInterceptError, match="invalid mock-route pattern"):
+        router.register(
+            route_id="r1",
+            pattern="not-a-pattern",
+            status=200,
+            body=b"",
+            content_type=None,
+            headers=None,
+            priority=0,
+            insertion_index=0,
+        )

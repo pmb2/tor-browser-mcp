@@ -34,6 +34,7 @@ pytestmark = pytest.mark.integration
 SOCKS_PORT = 9256
 CONTROL_PORT = 9257
 BRIDGE_PORT = 9258
+INTERCEPT_PORT = 9259
 
 
 @pytest.fixture(scope="module")
@@ -42,7 +43,12 @@ def drv(
     geckodriver_path: Path | None,
     tmp_path_factory: pytest.TempPathFactory,
 ) -> Iterator[TorBrowserDriver]:
-    """Boot one Tor Browser session with helper-extension enabled."""
+    """Boot one Tor Browser session with helper-extension and proxy-intercept enabled.
+
+    Mock-mode routes are fulfilled on the proxy-intercept substrate so
+    ``window.location`` remains at the original request URL; the
+    capability is opt-in but required for the route smoke tests.
+    """
 
     base = tmp_path_factory.mktemp("helper-extension-smoke")
     policy = PathPolicy.from_config(output_dir=base / "out", cwd=base)
@@ -54,7 +60,9 @@ def drv(
         socks_port=SOCKS_PORT,
         control_port=CONTROL_PORT,
         helper_bridge_port=BRIDGE_PORT,
-        enabled_caps=DEFAULT_CAPABILITIES | {"helper-extension"},
+        intercept_port=INTERCEPT_PORT,
+        enabled_caps=DEFAULT_CAPABILITIES
+        | {"helper-extension", "proxy-intercept"},
     )
 
     with TorBrowserDriver(config) as driver:
@@ -317,18 +325,18 @@ def test_helper_extension_init_script_runs_at_document_start(
 def test_helper_extension_routes_fetch_to_mocked_body(
     drv: TorBrowserDriver,
 ) -> None:
-    """A mock route answers a page-context fetch with the registered body.
+    """A mock route answers a request with the registered body on the original URL.
 
-    The driver registers the mock body on the bridge's ``/mock/<id>``
-    endpoint and tells the extension to redirect matching requests
-    there. After unrouting, the same fetch must fail because the
-    redirect rule is gone and ``example.invalid`` does not resolve.
+    The proxy-intercept substrate synthesises ``flow.response`` for
+    matching requests so ``window.location`` stays at the navigation
+    target -- Playwright ``page.route().fulfill()`` semantics. After
+    unrouting, the same fetch must fail because the rule is gone and
+    ``example.invalid`` does not resolve.
 
-    The page is loaded from the bridge's own ``/host`` endpoint so the
-    fetch and the redirect's terminal target both sit on the bridge
-    origin -- ``data:`` URL documents cannot make cross-origin
-    page-context fetches in Tor Browser, which would otherwise mask
-    the mock-mode behaviour under network errors.
+    Navigating to the mocked URL directly is the load-bearing
+    assertion here: a previous implementation redirected the browser
+    to a localhost mock server and broke ``window.location`` /
+    same-origin reasoning on every consumer.
     """
 
     drv.browser_navigate(f"http://127.0.0.1:{drv._helper_bridge.port}/host")
@@ -344,28 +352,30 @@ def test_helper_extension_routes_fetch_to_mocked_body(
     listed = drv.browser_route_list()
     assert any(r["route_id"] == route_id for r in listed["routes"])
 
-    drv.webdriver.set_script_timeout(15)
-    page_body = drv.webdriver.execute_async_script(
-        """
-        const cb = arguments[arguments.length - 1];
-        fetch('http://example.invalid/', {cache: 'no-store'})
-          .then(function (r) { return r.text(); })
-          .then(function (t) { cb({ok: true, body: t}); })
-          .catch(function (e) { cb({ok: false, error: String(e)}); });
-        """
+    target = "http://example.invalid/test-page"
+    drv.browser_navigate(target)
+    current_url = drv.webdriver.current_url
+    assert current_url == target, (
+        f"mock-mode navigation must preserve the original URL; got {current_url!r}"
     )
-    assert isinstance(page_body, dict) and page_body.get("ok") is True, (
-        f"fetch should resolve to the mocked body, got {page_body!r}"
+    location_href = drv.webdriver.execute_script("return window.location.href;")
+    assert location_href == target, (
+        f"window.location.href must equal the original URL; got {location_href!r}"
     )
-    assert page_body.get("body") == "ok", page_body
+    body_text = drv.webdriver.execute_script(
+        "return document.body ? document.body.innerText : '';"
+    )
+    assert body_text == "ok", body_text
 
     removed = drv.browser_unroute(pattern="*://example.invalid/*")
     assert removed == {"removed": 1}
 
+    drv.browser_navigate(f"http://127.0.0.1:{drv._helper_bridge.port}/host")
+    drv.webdriver.set_script_timeout(15)
     after = drv.webdriver.execute_async_script(
         """
         const cb = arguments[arguments.length - 1];
-        fetch('http://example.invalid/', {cache: 'no-store'})
+        fetch('http://example.invalid/test-page', {cache: 'no-store'})
           .then(function (r) { return r.text(); })
           .then(function (t) { cb({ok: true, body: t}); })
           .catch(function (e) { cb({ok: false, error: String(e)}); });
@@ -381,9 +391,10 @@ def test_helper_extension_mock_serves_custom_status_and_headers(
 ) -> None:
     """Mock-mode delivers arbitrary status, headers, and body.
 
-    Bridge-served mocks carry the full HTTP envelope -- the page
-    observes the registered status code and any user-supplied headers
-    alongside the response body.
+    The proxy-intercept substrate synthesises responses with the
+    configured status code, content type, and any caller-supplied
+    headers; the page observes the full HTTP envelope on the original
+    request URL.
     """
 
     drv.browser_navigate(f"http://127.0.0.1:{drv._helper_bridge.port}/host")
@@ -410,6 +421,7 @@ def test_helper_extension_mock_serves_custom_status_and_headers(
                     body: text,
                     content_type: r.headers.get('Content-Type'),
                     custom: r.headers.get('X-Test-Header'),
+                    url: r.url,
                   };
                 });
               })
@@ -425,6 +437,8 @@ def test_helper_extension_mock_serves_custom_status_and_headers(
     assert observed.get("body") == '{"error":"not found"}', observed
     assert observed.get("content_type") == "application/json", observed
     assert observed.get("custom") == "tor-browser-mcp", observed
+    # The fetch must see the original URL, not a localhost redirect target.
+    assert observed.get("url") == "http://example.invalid/lookup", observed
 
 
 def test_helper_extension_offline_mode_blocks_new_navigation(
