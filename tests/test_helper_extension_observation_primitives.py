@@ -93,11 +93,14 @@ def test_validate_match_pattern_accepts_valid(pattern: str) -> None:
     assert _validate_match_pattern(pattern) == pattern
 
 
+def test_validate_match_pattern_accepts_star_as_all_urls_sugar() -> None:
+    assert _validate_match_pattern("*") == "<all_urls>"
+
+
 @pytest.mark.parametrize(
     "pattern",
     [
         "",
-        "*",
         "example.com/*",
         "https://example.com",
         "://example.com/*",
@@ -110,6 +113,15 @@ def test_validate_match_pattern_accepts_valid(pattern: str) -> None:
 )
 def test_validate_match_pattern_rejects_invalid(pattern: Any) -> None:
     with pytest.raises(ValueError):
+        _validate_match_pattern(pattern)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["https://example.com", "example.com/*", "ftp:/example.com/*"],
+)
+def test_validate_match_pattern_error_mentions_expected_form(pattern: str) -> None:
+    with pytest.raises(ValueError, match="WebExtension match pattern"):
         _validate_match_pattern(pattern)
 
 
@@ -218,6 +230,14 @@ def test_capture_start_defaults_to_all_urls_when_patterns_none() -> None:
     assert params["patterns"] == ["<all_urls>"]
 
 
+def test_capture_start_accepts_star_sugar_as_all_urls() -> None:
+    bridge = _FakeBridge()
+    drv = _Driver(bridge=bridge)
+    drv.browser_network_capture_start(patterns=["*"])
+    _, params = bridge.calls[0]
+    assert params["patterns"] == ["<all_urls>"]
+
+
 def test_capture_start_rejects_overlapping_capture() -> None:
     bridge = _FakeBridge()
     drv = _Driver(bridge=bridge)
@@ -306,6 +326,10 @@ def test_capture_stop_limit_and_file_output(policy: PathPolicy) -> None:
                 "started_at": float(idx),
             },
         )
+        _apply_response_observed(
+            state,
+            {"request_id": f"r{idx}", "status_code": 200 + idx},
+        )
 
     result = drv.browser_network_capture_stop(
         capture_id, limit=1, filename="capture.json"
@@ -315,10 +339,28 @@ def test_capture_stop_limit_and_file_output(policy: PathPolicy) -> None:
     assert result["total"] == 2
     assert result["truncated"] is True
     assert "entries" not in result
+    assert result["preview"] == {
+        "url": "https://example.com/0",
+        "method": "GET",
+        "status_code": 200,
+    }
     written = Path(result["path"])
     payload = json.loads(written.read_text(encoding="utf-8"))
     assert len(payload["entries"]) == 1
     assert payload["total"] == 2
+
+
+def test_capture_stop_file_output_preview_is_none_when_empty(
+    policy: PathPolicy,
+) -> None:
+    bridge = _FakeBridge()
+    drv = _Driver(bridge=bridge)
+    drv.config = SimpleNamespace(path_policy=policy)
+    start = drv.browser_network_capture_start(patterns=["https://example.com/*"])
+    capture_id = start["capture_id"]
+    result = drv.browser_network_capture_stop(capture_id, filename="empty.json")
+    assert result["count"] == 0
+    assert result["preview"] is None
 
 
 # --- page-world body merge -------------------------------------------------

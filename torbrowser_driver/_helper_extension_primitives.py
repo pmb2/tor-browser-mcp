@@ -51,10 +51,18 @@ _MATCH_PATTERN_RE = re.compile(
 )
 
 
-def _validate_match_pattern(pattern: Any) -> str:
-    """Return ``pattern`` unchanged when valid; otherwise raise ``ValueError``.
+_MATCH_PATTERN_HINT = (
+    "expected WebExtension match pattern of form 'scheme://host/path' "
+    "(e.g. 'https://*/*' for all https, '*://*.example.com/*' for a host "
+    "pattern), '<all_urls>', or '*' as sugar for all urls"
+)
 
-    Accepts the literal ``<all_urls>`` plus the documented
+
+def _validate_match_pattern(pattern: Any) -> str:
+    """Return a normalized match pattern when valid; otherwise raise ``ValueError``.
+
+    Accepts the literal ``<all_urls>``, the convenience alias ``"*"``
+    (rewritten to ``<all_urls>``), and the documented
     ``<scheme>://<host><path>`` shapes (``*``, ``http``, ``https``,
     ``ws``, ``wss``, ``ftp``, ``file`` schemes; host may be ``*``,
     ``*.suffix``, a bare host, or empty for ``file://``; path starts
@@ -63,15 +71,17 @@ def _validate_match_pattern(pattern: Any) -> str:
 
     if not isinstance(pattern, str) or not pattern:
         raise ValueError(f"match pattern must be a non-empty string; got {pattern!r}")
-    if pattern == _ALL_URLS:
-        return pattern
+    if pattern == _ALL_URLS or pattern == "*":
+        return _ALL_URLS
     match = _MATCH_PATTERN_RE.match(pattern)
     if not match:
-        raise ValueError(f"invalid match pattern: {pattern!r}")
+        raise ValueError(f"invalid match pattern: {pattern!r}; {_MATCH_PATTERN_HINT}")
     scheme = match.group("scheme")
     host = match.group("host")
     if scheme != "file" and host == "":
-        raise ValueError(f"invalid match pattern: {pattern!r} (host required)")
+        raise ValueError(
+            f"invalid match pattern: {pattern!r} (host required); {_MATCH_PATTERN_HINT}"
+        )
     return pattern
 
 
@@ -759,7 +769,8 @@ class _HelperExtensionCapabilityMixin:
         """Begin observing network traffic matching ``patterns``.
 
         Each pattern follows Firefox match-pattern syntax (see
-        :func:`_validate_match_pattern`). ``None`` is equivalent to
+        :func:`_validate_match_pattern`). The literal ``"*"`` is
+        accepted as sugar for ``<all_urls>``. ``None`` is equivalent to
         ``["<all_urls>"]``.
 
         The returned capture buffers per-request envelopes (URL, method,
@@ -868,10 +879,13 @@ class _HelperExtensionCapabilityMixin:
 
         ``limit`` caps inline entries after the capture is finalized.
         ``filename`` writes the JSON payload under the output dir and
-        returns only artifact metadata. Raises :class:`ValueError` if
-        ``capture_id`` is unknown. The extension-side listeners are removed
-        before the entries are flushed; late events that arrive after stop
-        are dropped on the floor.
+        returns only artifact metadata plus a ``preview`` field carrying
+        the first entry's ``{url, method, status_code}`` (``None`` when
+        the capture is empty), so callers can sanity-check without
+        reading the file. Raises :class:`ValueError` if ``capture_id`` is
+        unknown. The extension-side listeners are removed before the
+        entries are flushed; late events that arrive after stop are
+        dropped on the floor.
         """
 
         _validate_limit(limit)
@@ -901,6 +915,16 @@ class _HelperExtensionCapabilityMixin:
             path = self.config.path_policy.resolve_output(filename)
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             path.write_bytes(data)
+            preview: dict[str, Any] | None
+            if entries:
+                first = entries[0]
+                preview = {
+                    "url": first.get("url"),
+                    "method": first.get("method"),
+                    "status_code": first.get("status_code"),
+                }
+            else:
+                preview = None
             return {
                 "capture_id": capture_id,
                 "path": str(path),
@@ -908,6 +932,7 @@ class _HelperExtensionCapabilityMixin:
                 "count": payload["count"],
                 "total": total,
                 "truncated": payload["truncated"],
+                "preview": preview,
             }
         return payload
 
