@@ -66,7 +66,7 @@ class _NetworkObserveCapabilityMixin:
     @capability("network-observe")
     def browser_network_requests(
         self,
-        filter: str | None = None,
+        url_filter: str | None = None,
         filename: str | None = None,
     ) -> dict[str, Any]:
         """List network entries visible to the Performance API.
@@ -74,15 +74,14 @@ class _NetworkObserveCapabilityMixin:
         Each entry carries ``url``, ``initiator_type``, ``request_start``,
         ``response_start``, ``response_end``, ``transfer_size``,
         ``duration``, ``decoded_body_size``, and ``next_hop_protocol``.
-        ``filter`` is a substring match against ``url``. Only the static
-        (Performance-API-derived) view is implemented here. When
+        ``url_filter`` is a substring match against ``url``. Only the
+        static (Performance-API-derived) view is implemented here. When
         ``filename`` is set, the JSON is written under the output dir.
         """
 
         entries = self._collect_network_entries()
-        if filter is not None:
-            needle = filter
-            entries = [e for e in entries if needle in str(e.get("url") or "")]
+        if url_filter is not None:
+            entries = [e for e in entries if url_filter in str(e.get("url") or "")]
 
         payload = {
             "requests": entries,

@@ -40,6 +40,9 @@ if TYPE_CHECKING:
     from .config import DriverConfig
 
 
+_DEFAULT_MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+
+
 _ALLOWED_METHODS: frozenset[str] = frozenset(
     {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
 )
@@ -346,7 +349,7 @@ class _HttpOverTorCapabilityMixin:
         body: str | bytes | None = None,
         use_browser_cookies: bool = False,
         timeout: float = 60.0,
-        max_response_bytes: int = 5 * 1024 * 1024,
+        max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
         filename: str | None = None,
     ) -> dict[str, Any]:
         """Issue a single HTTP request through the bundled tor's SOCKS port.
@@ -478,7 +481,9 @@ class _HttpOverTorCapabilityMixin:
             headers = entry.get("headers")
             body = entry.get("body")
             timeout = float(entry.get("timeout", 60.0))
-            max_response_bytes = int(entry.get("max_response_bytes", 5 * 1024 * 1024))
+            max_response_bytes = int(
+                entry.get("max_response_bytes", _DEFAULT_MAX_RESPONSE_BYTES)
+            )
 
             caller_cookie: str | None = None
             if isinstance(headers, dict):

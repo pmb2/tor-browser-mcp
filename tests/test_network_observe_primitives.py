@@ -62,7 +62,7 @@ def test_network_requests_returns_all(drv: TorBrowserDriver) -> None:
 
 
 def test_network_requests_filter(drv: TorBrowserDriver) -> None:
-    result = drv.browser_network_requests(filter="other.test")
+    result = drv.browser_network_requests(url_filter="other.test")
     assert result["count"] == 1
     assert result["requests"][0]["url"] == "https://other.test/img.png"
 

@@ -53,15 +53,13 @@ def test_tor_set_exit_country_strict_false_sends_zero(drv: TorBrowserDriver) -> 
     assert ("StrictNodes", "0") in {c.args for c in set_calls}
 
 
-def test_tor_set_exit_country_rejects_three_letter(drv: TorBrowserDriver) -> None:
+@pytest.mark.parametrize("country", ["USA", "12", "", "d!"])
+def test_tor_set_exit_country_rejects_bad_country(
+    drv: TorBrowserDriver, country: str
+) -> None:
     with pytest.raises(ValueError, match="invalid country code"):
-        drv.tor_set_exit_country("USA")
+        drv.tor_set_exit_country(country)
     drv.controller.set_conf.assert_not_called()
-
-
-def test_tor_set_exit_country_rejects_digits(drv: TorBrowserDriver) -> None:
-    with pytest.raises(ValueError, match="invalid country code"):
-        drv.tor_set_exit_country("12")
 
 
 def test_tor_set_exit_nodes_fingerprint(drv: TorBrowserDriver) -> None:

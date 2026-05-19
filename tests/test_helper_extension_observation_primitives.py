@@ -16,21 +16,21 @@ import pytest
 from torbrowser_driver._helper_extension_primitives import (
     _CaptureState,
     _HelperExtensionCapabilityMixin,
+    _apply_body_chunk,
+    _apply_body_observed,
     _apply_page_body,
+    _apply_request_headers,
+    _apply_request_observed,
+    _apply_response_completed,
+    _apply_response_error,
+    _apply_response_observed,
+    _decode_body,
     _envelope_from_page_body,
+    _finalize_capture,
     _match_page_body_to_envelope,
+    _patterns_overlap,
     _truncate_to_bytes,
-    apply_body_chunk,
-    apply_body_observed,
-    apply_request_headers,
-    apply_request_observed,
-    apply_response_completed,
-    apply_response_error,
-    apply_response_observed,
-    decode_body,
-    finalize_capture,
-    patterns_overlap,
-    validate_match_pattern,
+    _validate_match_pattern,
 )
 from torbrowser_driver.exceptions import HelperUnavailable
 
@@ -87,7 +87,7 @@ class _Driver(_HelperExtensionCapabilityMixin):
     ],
 )
 def test_validate_match_pattern_accepts_valid(pattern: str) -> None:
-    assert validate_match_pattern(pattern) == pattern
+    assert _validate_match_pattern(pattern) == pattern
 
 
 @pytest.mark.parametrize(
@@ -107,29 +107,29 @@ def test_validate_match_pattern_accepts_valid(pattern: str) -> None:
 )
 def test_validate_match_pattern_rejects_invalid(pattern: Any) -> None:
     with pytest.raises(ValueError):
-        validate_match_pattern(pattern)
+        _validate_match_pattern(pattern)
 
 
 # --- capture overlap --------------------------------------------------------
 
 
 def test_patterns_overlap_two_all_urls() -> None:
-    assert patterns_overlap(["<all_urls>"], ["<all_urls>"]) is True
+    assert _patterns_overlap(["<all_urls>"], ["<all_urls>"]) is True
 
 
 def test_patterns_overlap_all_urls_versus_specific() -> None:
-    assert patterns_overlap(["<all_urls>"], ["https://example.com/*"]) is True
-    assert patterns_overlap(["https://example.com/*"], ["<all_urls>"]) is True
+    assert _patterns_overlap(["<all_urls>"], ["https://example.com/*"]) is True
+    assert _patterns_overlap(["https://example.com/*"], ["<all_urls>"]) is True
 
 
 def test_patterns_overlap_equal_specific() -> None:
-    assert patterns_overlap(
+    assert _patterns_overlap(
         ["https://example.com/*"], ["https://example.com/*"]
     ) is True
 
 
 def test_patterns_overlap_disjoint_specific() -> None:
-    assert patterns_overlap(
+    assert _patterns_overlap(
         ["https://a.example.com/*"], ["https://b.example.com/*"]
     ) is False
 
@@ -138,12 +138,12 @@ def test_patterns_overlap_disjoint_specific() -> None:
 
 
 def test_decode_body_utf8_returns_str() -> None:
-    assert decode_body("hello world".encode("utf-8")) == "hello world"
+    assert _decode_body("hello world".encode("utf-8")) == "hello world"
 
 
 def test_decode_body_non_utf8_returns_base64_envelope() -> None:
     raw = b"\xff\xfe\xfd\x00\x01"
-    decoded = decode_body(raw)
+    decoded = _decode_body(raw)
     assert isinstance(decoded, dict)
     assert "base64" in decoded
     assert base64.b64decode(decoded["base64"]) == raw
@@ -242,7 +242,7 @@ def test_capture_stop_round_trip_returns_entries() -> None:
     start = drv.browser_network_capture_start(patterns=["https://example.com/*"])
     capture_id = start["capture_id"]
     state = drv._captures_map()[capture_id]
-    apply_request_observed(
+    _apply_request_observed(
         state,
         {
             "request_id": "r1",
@@ -251,7 +251,7 @@ def test_capture_stop_round_trip_returns_entries() -> None:
             "started_at": 1.0,
         },
     )
-    apply_response_observed(
+    _apply_response_observed(
         state,
         {
             "request_id": "r1",
@@ -259,7 +259,7 @@ def test_capture_stop_round_trip_returns_entries() -> None:
             "response_headers": {"Content-Type": "text/html"},
         },
     )
-    apply_body_chunk(
+    _apply_body_chunk(
         state,
         {
             "request_id": "r1",
@@ -408,7 +408,7 @@ def test_truncate_to_bytes_no_clip_for_fitting_text() -> None:
 
 def test_finalize_capture_merges_page_body_into_webrequest_envelope() -> None:
     state = _make_state()
-    apply_request_observed(
+    _apply_request_observed(
         state,
         {
             "request_id": "r1",
@@ -416,7 +416,7 @@ def test_finalize_capture_merges_page_body_into_webrequest_envelope() -> None:
             "url": "https://example.com/api",
         },
     )
-    apply_response_observed(
+    _apply_response_observed(
         state,
         {
             "request_id": "r1",
@@ -424,7 +424,7 @@ def test_finalize_capture_merges_page_body_into_webrequest_envelope() -> None:
             "response_headers": {"Content-Type": "application/json"},
         },
     )
-    apply_body_observed(
+    _apply_body_observed(
         state,
         {
             "url": "https://example.com/api",
@@ -435,7 +435,7 @@ def test_finalize_capture_merges_page_body_into_webrequest_envelope() -> None:
             "page_id": "tbm-f-1",
         },
     )
-    entries = finalize_capture(state)
+    entries = _finalize_capture(state)
     assert len(entries) == 1
     entry = entries[0]
     assert entry["request_id"] == "r1"
@@ -449,7 +449,7 @@ def test_finalize_capture_merges_page_body_into_webrequest_envelope() -> None:
 
 def test_finalize_capture_page_only_request_becomes_synthetic_envelope() -> None:
     state = _make_state()
-    apply_body_observed(
+    _apply_body_observed(
         state,
         {
             "url": "https://example.com/sw-only",
@@ -461,7 +461,7 @@ def test_finalize_capture_page_only_request_becomes_synthetic_envelope() -> None
             "observed_at": 1234.5,
         },
     )
-    entries = finalize_capture(state)
+    entries = _finalize_capture(state)
     assert len(entries) == 1
     entry = entries[0]
     assert entry["request_id"] is None
@@ -476,7 +476,7 @@ def test_finalize_capture_page_only_request_becomes_synthetic_envelope() -> None
 
 def test_finalize_capture_webrequest_only_entry_keeps_source_webrequest() -> None:
     state = _make_state()
-    apply_request_observed(
+    _apply_request_observed(
         state,
         {
             "request_id": "r9",
@@ -484,7 +484,7 @@ def test_finalize_capture_webrequest_only_entry_keeps_source_webrequest() -> Non
             "url": "https://cdn.example.com/img.png",
         },
     )
-    apply_response_observed(
+    _apply_response_observed(
         state,
         {
             "request_id": "r9",
@@ -492,7 +492,7 @@ def test_finalize_capture_webrequest_only_entry_keeps_source_webrequest() -> Non
             "response_headers": {"Content-Type": "image/png"},
         },
     )
-    entries = finalize_capture(state)
+    entries = _finalize_capture(state)
     assert len(entries) == 1
     entry = entries[0]
     assert entry["source"] == "webrequest"
@@ -501,7 +501,7 @@ def test_finalize_capture_webrequest_only_entry_keeps_source_webrequest() -> Non
 
 def test_finalize_capture_truncates_page_body_to_max_bytes() -> None:
     state = _make_state(max_body_bytes=4)
-    apply_request_observed(
+    _apply_request_observed(
         state,
         {
             "request_id": "r1",
@@ -509,7 +509,7 @@ def test_finalize_capture_truncates_page_body_to_max_bytes() -> None:
             "url": "https://example.com/api",
         },
     )
-    apply_body_observed(
+    _apply_body_observed(
         state,
         {
             "url": "https://example.com/api",
@@ -517,7 +517,7 @@ def test_finalize_capture_truncates_page_body_to_max_bytes() -> None:
             "response_body": "abcdefgh",
         },
     )
-    entries = finalize_capture(state)
+    entries = _finalize_capture(state)
     assert len(entries) == 1
     entry = entries[0]
     assert entry["response_body"] == "abcd"
@@ -527,23 +527,23 @@ def test_finalize_capture_truncates_page_body_to_max_bytes() -> None:
 
 def test_finalize_capture_two_parallel_requests_pair_fifo() -> None:
     state = _make_state()
-    apply_request_observed(
+    _apply_request_observed(
         state,
         {"request_id": "r1", "method": "GET", "url": "https://example.com/api"},
     )
-    apply_request_observed(
+    _apply_request_observed(
         state,
         {"request_id": "r2", "method": "GET", "url": "https://example.com/api"},
     )
-    apply_body_observed(
+    _apply_body_observed(
         state,
         {"url": "https://example.com/api", "method": "GET", "response_body": "first"},
     )
-    apply_body_observed(
+    _apply_body_observed(
         state,
         {"url": "https://example.com/api", "method": "GET", "response_body": "second"},
     )
-    entries = finalize_capture(state)
+    entries = _finalize_capture(state)
     assert len(entries) == 2
     r1 = next(e for e in entries if e["request_id"] == "r1")
     r2 = next(e for e in entries if e["request_id"] == "r2")
@@ -596,7 +596,7 @@ def _make_state(max_body_bytes: int = 1024) -> _CaptureState:
 
 def test_envelope_assembly_fills_every_field() -> None:
     state = _make_state()
-    apply_request_observed(
+    _apply_request_observed(
         state,
         {
             "request_id": "rid",
@@ -605,11 +605,11 @@ def test_envelope_assembly_fills_every_field() -> None:
             "started_at": 123.0,
         },
     )
-    apply_request_headers(
+    _apply_request_headers(
         state,
         {"request_id": "rid", "request_headers": {"Accept": "*/*"}},
     )
-    apply_response_observed(
+    _apply_response_observed(
         state,
         {
             "request_id": "rid",
@@ -617,7 +617,7 @@ def test_envelope_assembly_fills_every_field() -> None:
             "response_headers": {"Content-Type": "application/json"},
         },
     )
-    apply_body_chunk(
+    _apply_body_chunk(
         state,
         {
             "request_id": "rid",
@@ -625,12 +625,12 @@ def test_envelope_assembly_fills_every_field() -> None:
             "is_final": True,
         },
     )
-    apply_response_completed(
+    _apply_response_completed(
         state,
         {"request_id": "rid", "completed_at": 200.0, "ip": "203.0.113.5"},
     )
 
-    entries = finalize_capture(state)
+    entries = _finalize_capture(state)
     assert len(entries) == 1
     e = entries[0]
     assert e["request_id"] == "rid"
@@ -650,20 +650,20 @@ def test_envelope_assembly_fills_every_field() -> None:
 
 def test_response_error_records_error_field() -> None:
     state = _make_state()
-    apply_request_observed(state, {"request_id": "r", "method": "GET", "url": "x"})
-    apply_response_error(
+    _apply_request_observed(state, {"request_id": "r", "method": "GET", "url": "x"})
+    _apply_response_error(
         state,
         {"request_id": "r", "error": "net::ERR_FAILED", "completed_at": 9.0},
     )
-    entries = finalize_capture(state)
+    entries = _finalize_capture(state)
     assert entries[0]["error"] == "net::ERR_FAILED"
     assert entries[0]["completed_at"] == 9.0
 
 
 def test_body_truncation_marks_truncated_and_clips_to_max() -> None:
     state = _make_state(max_body_bytes=4)
-    apply_request_observed(state, {"request_id": "r", "method": "GET", "url": "x"})
-    apply_body_chunk(
+    _apply_request_observed(state, {"request_id": "r", "method": "GET", "url": "x"})
+    _apply_body_chunk(
         state,
         {
             "request_id": "r",
@@ -671,7 +671,7 @@ def test_body_truncation_marks_truncated_and_clips_to_max() -> None:
             "is_final": False,
         },
     )
-    apply_body_chunk(
+    _apply_body_chunk(
         state,
         {
             "request_id": "r",
@@ -679,7 +679,7 @@ def test_body_truncation_marks_truncated_and_clips_to_max() -> None:
             "is_final": False,
         },
     )
-    apply_body_chunk(
+    _apply_body_chunk(
         state,
         {
             "request_id": "r",
@@ -688,16 +688,16 @@ def test_body_truncation_marks_truncated_and_clips_to_max() -> None:
         },
     )
 
-    entries = finalize_capture(state)
+    entries = _finalize_capture(state)
     assert entries[0]["response_body_truncated"] is True
     assert entries[0]["response_body"] == "ABCD"
 
 
 def test_body_decoding_non_utf8_returns_base64_envelope() -> None:
     state = _make_state()
-    apply_request_observed(state, {"request_id": "r", "method": "GET", "url": "x"})
+    _apply_request_observed(state, {"request_id": "r", "method": "GET", "url": "x"})
     raw = b"\xff\xfe\x00\x01"
-    apply_body_chunk(
+    _apply_body_chunk(
         state,
         {
             "request_id": "r",
@@ -705,15 +705,15 @@ def test_body_decoding_non_utf8_returns_base64_envelope() -> None:
             "is_final": True,
         },
     )
-    body = finalize_capture(state)[0]["response_body"]
+    body = _finalize_capture(state)[0]["response_body"]
     assert isinstance(body, dict)
     assert base64.b64decode(body["base64"]) == raw
 
 
 def test_finalize_capture_assembles_body_when_no_final_chunk_arrived() -> None:
     state = _make_state()
-    apply_request_observed(state, {"request_id": "r", "method": "GET", "url": "x"})
-    apply_body_chunk(
+    _apply_request_observed(state, {"request_id": "r", "method": "GET", "url": "x"})
+    _apply_body_chunk(
         state,
         {
             "request_id": "r",
@@ -721,7 +721,7 @@ def test_finalize_capture_assembles_body_when_no_final_chunk_arrived() -> None:
             "is_final": False,
         },
     )
-    entries = finalize_capture(state)
+    entries = _finalize_capture(state)
     assert entries[0]["response_body"] == "partial"
 
 

@@ -15,6 +15,7 @@ emits.
 from __future__ import annotations
 
 import base64
+import binascii
 import itertools
 import re
 import secrets
@@ -44,7 +45,7 @@ _MATCH_PATTERN_RE = re.compile(
 )
 
 
-def validate_match_pattern(pattern: Any) -> str:
+def _validate_match_pattern(pattern: Any) -> str:
     """Return ``pattern`` unchanged when valid; otherwise raise ``ValueError``.
 
     Accepts the literal ``<all_urls>`` plus the documented
@@ -68,7 +69,7 @@ def validate_match_pattern(pattern: Any) -> str:
     return pattern
 
 
-def patterns_overlap(a: list[str], b: list[str]) -> bool:
+def _patterns_overlap(a: list[str], b: list[str]) -> bool:
     """Conservative overlap check between two pattern lists.
 
     Returns ``True`` when either side contains ``<all_urls>`` or any two
@@ -82,7 +83,7 @@ def patterns_overlap(a: list[str], b: list[str]) -> bool:
     return any(x == y for x in a for y in b)
 
 
-def decode_body(buf: bytes) -> str | dict[str, str]:
+def _decode_body(buf: bytes) -> str | dict[str, str]:
     """Return UTF-8 text when ``buf`` decodes cleanly; otherwise a
     ``{"base64": ...}`` envelope so the result remains JSON-safe."""
 
@@ -281,7 +282,7 @@ def _ensure_entry(state: _CaptureState, request_id: str) -> dict[str, Any]:
     return entry
 
 
-def apply_request_observed(state: _CaptureState, data: dict[str, Any]) -> None:
+def _apply_request_observed(state: _CaptureState, data: dict[str, Any]) -> None:
     rid = str(data.get("request_id"))
     with state.lock:
         entry = _ensure_entry(state, rid)
@@ -293,7 +294,7 @@ def apply_request_observed(state: _CaptureState, data: dict[str, Any]) -> None:
             entry["started_at"] = data["started_at"]
 
 
-def apply_request_headers(state: _CaptureState, data: dict[str, Any]) -> None:
+def _apply_request_headers(state: _CaptureState, data: dict[str, Any]) -> None:
     rid = str(data.get("request_id"))
     headers = data.get("request_headers")
     if not isinstance(headers, dict):
@@ -303,7 +304,7 @@ def apply_request_headers(state: _CaptureState, data: dict[str, Any]) -> None:
         entry["request_headers"] = dict(headers)
 
 
-def apply_response_observed(state: _CaptureState, data: dict[str, Any]) -> None:
+def _apply_response_observed(state: _CaptureState, data: dict[str, Any]) -> None:
     rid = str(data.get("request_id"))
     with state.lock:
         entry = _ensure_entry(state, rid)
@@ -314,7 +315,7 @@ def apply_response_observed(state: _CaptureState, data: dict[str, Any]) -> None:
             entry["response_headers"] = dict(headers)
 
 
-def apply_body_chunk(state: _CaptureState, data: dict[str, Any]) -> None:
+def _apply_body_chunk(state: _CaptureState, data: dict[str, Any]) -> None:
     rid = str(data.get("request_id"))
     chunk_b64 = data.get("chunk_b64") or ""
     is_final = bool(data.get("is_final"))
@@ -326,7 +327,7 @@ def apply_body_chunk(state: _CaptureState, data: dict[str, Any]) -> None:
         if chunk_b64:
             try:
                 chunk = base64.b64decode(chunk_b64)
-            except (ValueError, base64.binascii.Error):  # type: ignore[attr-defined]
+            except (ValueError, binascii.Error):
                 chunk = b""
             allowed = state.max_body_bytes - current_len
             if allowed <= 0:
@@ -346,12 +347,12 @@ def apply_body_chunk(state: _CaptureState, data: dict[str, Any]) -> None:
         # again on is_final so the final state is correct regardless of
         # arrival order.
         if buf_changed or is_final:
-            entry["response_body"] = decode_body(bytes(buf))
+            entry["response_body"] = _decode_body(bytes(buf))
         if is_final:
             state.body_finalized.add(rid)
 
 
-def apply_response_completed(state: _CaptureState, data: dict[str, Any]) -> None:
+def _apply_response_completed(state: _CaptureState, data: dict[str, Any]) -> None:
     rid = str(data.get("request_id"))
     with state.lock:
         entry = _ensure_entry(state, rid)
@@ -360,7 +361,7 @@ def apply_response_completed(state: _CaptureState, data: dict[str, Any]) -> None
             entry["ip"] = data.get("ip")
 
 
-def apply_response_error(state: _CaptureState, data: dict[str, Any]) -> None:
+def _apply_response_error(state: _CaptureState, data: dict[str, Any]) -> None:
     rid = str(data.get("request_id"))
     with state.lock:
         entry = _ensure_entry(state, rid)
@@ -369,12 +370,12 @@ def apply_response_error(state: _CaptureState, data: dict[str, Any]) -> None:
             entry["completed_at"] = data.get("completed_at") or _now_ms()
 
 
-def apply_body_observed(state: _CaptureState, data: dict[str, Any]) -> None:
+def _apply_body_observed(state: _CaptureState, data: dict[str, Any]) -> None:
     """Buffer a page-world body envelope for later merge into the capture.
 
     The webRequest event stream and the page-world override use distinct
     id namespaces, so the merge cannot happen on arrival; it is deferred
-    to :func:`finalize_capture`, which pairs entries by ``(method, url)``
+    to :func:`_finalize_capture`, which pairs entries by ``(method, url)``
     and falls back to synthetic envelopes for page-only requests.
     """
 
@@ -517,7 +518,7 @@ def _envelope_from_page_body(
     return entry
 
 
-def finalize_capture(state: _CaptureState) -> list[dict[str, Any]]:
+def _finalize_capture(state: _CaptureState) -> list[dict[str, Any]]:
     """Flush pending body buffers, merge page-world bodies, and return
     the assembled entries.
 
@@ -544,7 +545,7 @@ def finalize_capture(state: _CaptureState) -> list[dict[str, Any]]:
             if entry is None:
                 continue
             if buf:
-                entry["response_body"] = decode_body(bytes(buf))
+                entry["response_body"] = _decode_body(bytes(buf))
                 state.body_finalized.add(rid)
 
         ordered_envelopes = list(state.entries.values())
@@ -683,25 +684,25 @@ class _HelperExtensionCapabilityMixin:
         apply_fn(state, data)
 
     def _on_request_observed(self, data: dict[str, Any]) -> None:
-        self._route_event(data, apply_request_observed)
+        self._route_event(data, _apply_request_observed)
 
     def _on_request_headers(self, data: dict[str, Any]) -> None:
-        self._route_event(data, apply_request_headers)
+        self._route_event(data, _apply_request_headers)
 
     def _on_response_observed(self, data: dict[str, Any]) -> None:
-        self._route_event(data, apply_response_observed)
+        self._route_event(data, _apply_response_observed)
 
     def _on_body_chunk(self, data: dict[str, Any]) -> None:
-        self._route_event(data, apply_body_chunk)
+        self._route_event(data, _apply_body_chunk)
 
     def _on_response_completed(self, data: dict[str, Any]) -> None:
-        self._route_event(data, apply_response_completed)
+        self._route_event(data, _apply_response_completed)
 
     def _on_response_error(self, data: dict[str, Any]) -> None:
-        self._route_event(data, apply_response_error)
+        self._route_event(data, _apply_response_error)
 
     def _on_body_observed(self, data: dict[str, Any]) -> None:
-        self._route_event(data, apply_body_observed)
+        self._route_event(data, _apply_body_observed)
 
     @capability("helper-extension")
     def browser_extension_status(self) -> dict[str, Any]:
@@ -750,7 +751,7 @@ class _HelperExtensionCapabilityMixin:
         """Begin observing network traffic matching ``patterns``.
 
         Each pattern follows Firefox match-pattern syntax (see
-        :func:`validate_match_pattern`). ``None`` is equivalent to
+        :func:`_validate_match_pattern`). ``None`` is equivalent to
         ``["<all_urls>"]``.
 
         The returned capture buffers per-request envelopes (URL, method,
@@ -798,13 +799,13 @@ class _HelperExtensionCapabilityMixin:
         else:
             if not isinstance(patterns, list) or not patterns:
                 raise ValueError("patterns must be a non-empty list or None")
-            normalized = [validate_match_pattern(p) for p in patterns]
+            normalized = [_validate_match_pattern(p) for p in patterns]
         if not isinstance(max_body_bytes, int) or max_body_bytes < 0:
             raise ValueError("max_body_bytes must be a non-negative int")
 
         captures = self._captures_map()
         for cid, state in captures.items():
-            if patterns_overlap(normalized, state.patterns):
+            if _patterns_overlap(normalized, state.patterns):
                 raise ValueError(
                     f"patterns {normalized!r} overlap with existing capture "
                     f"{cid!r} (patterns={state.patterns!r})"
@@ -867,7 +868,7 @@ class _HelperExtensionCapabilityMixin:
             bridge.request("capture.stop", {"capture_id": capture_id})
         finally:
             captures.pop(capture_id, None)
-        entries = finalize_capture(state)
+        entries = _finalize_capture(state)
         return {"capture_id": capture_id, "entries": entries}
 
     @capability("helper-extension")
@@ -956,7 +957,7 @@ class _HelperExtensionCapabilityMixin:
         :meth:`browser_unroute`.
         """
 
-        validate_match_pattern(pattern)
+        _validate_match_pattern(pattern)
         mode = _resolve_route_mode(
             body,
             redirect_url,

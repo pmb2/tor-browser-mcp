@@ -185,18 +185,18 @@ class _ExtractCapabilityMixin:
         def _require_driver(self) -> "webdriver.Firefox": ...
 
     @capability("extract")
-    def browser_extract_links(self, filter: str | None = None) -> dict[str, Any]:
+    def browser_extract_links(self, url_filter: str | None = None) -> dict[str, Any]:
         """Return every ``<a href>`` on the page.
 
-        ``filter`` is an optional case-insensitive substring matched against
-        the ``href``. Each entry carries ``href``, ``text``, ``title``, and
-        ``rel``.
+        ``url_filter`` is an optional case-insensitive substring matched
+        against the ``href``. Each entry carries ``href``, ``text``,
+        ``title``, and ``rel``.
         """
 
         drv = self._require_driver()
         links = list(drv.execute_script(_LINKS_JS) or [])
-        if filter is not None:
-            needle = filter.lower()
+        if url_filter is not None:
+            needle = url_filter.lower()
             links = [
                 link
                 for link in links

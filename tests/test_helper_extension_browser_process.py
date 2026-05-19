@@ -45,6 +45,3 @@ def test_helper_cap_on_sets_sideload_prefs(
     assert prefs["xpinstall.signatures.required"] is False
     assert prefs["network.proxy.allow_hijacking_localhost"] is False
     assert prefs["network.proxy.no_proxies_on"] == "127.0.0.1,localhost"
-
-
-

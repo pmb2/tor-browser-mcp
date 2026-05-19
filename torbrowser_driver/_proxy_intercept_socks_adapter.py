@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from .exceptions import ProxyInterceptError
 
@@ -72,7 +72,7 @@ class SocksHttpConnectAdapter:
         self._listen_port = listen_port
         self._socks_host = socks_host
         self._socks_port = socks_port
-        self._server: Optional[asyncio.base_events.Server] = None
+        self._server: asyncio.base_events.Server | None = None
         self._actual_port: int | None = None
 
     @property

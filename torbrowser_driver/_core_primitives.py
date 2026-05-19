@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 
 _PAGE_SOURCE_INLINE_CAP = 1_048_576  # 1 MB
 _TEXT_READ_INLINE_CAP = 262_144  # 256 KB
+_BROWSER_WAIT_POLL_INTERVAL = 0.25
 
 
 _SNAPSHOT_JS = r"""
@@ -194,7 +195,9 @@ class _CoreCapabilityMixin:
         """
 
         drv = self._require_driver()
-        if url.lower().startswith("file:") and not self.config.path_policy.is_file_url_allowed(url):
+        if url.lower().startswith("file:") and not self.config.path_policy.is_file_url_allowed(
+            url
+        ):
             raise PathNotAllowed(f"file:// URL not allowed: {url}")
         drv.get(url)
         return {"url": drv.current_url, "title": drv.title}
@@ -406,7 +409,7 @@ class _CoreCapabilityMixin:
                 raise BrowserTimeoutError(
                     f"body text condition ({mode}={needle!r}) not met within {timeout}s"
                 )
-            time.sleep(0.25)
+            time.sleep(_BROWSER_WAIT_POLL_INTERVAL)
 
     @capability("core")
     def browser_click(
@@ -1015,7 +1018,7 @@ class _CoreCapabilityMixin:
             json.dumps(session_payload, ensure_ascii=False).encode("utf-8")
         )
 
-        console = self.browser_console_messages(all=True)  # type: ignore[attr-defined]
+        console = self.browser_console_messages(include_all=True)  # type: ignore[attr-defined]
         console_path = policy.resolve_output(f"{prefix}-console.json")
         if "path" in console:
             console_for_file = {

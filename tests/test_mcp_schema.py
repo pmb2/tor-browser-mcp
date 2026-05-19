@@ -10,7 +10,7 @@ from torbrowser_driver import TorBrowserDriver
 from torbrowser_mcp.schema import tool_description, tool_input_schema
 
 
-def test_no_params() -> None:
+def test_tool_input_schema_no_params() -> None:
     def fn() -> dict[str, Any]:
         """Do nothing useful."""
         return {}
@@ -22,7 +22,7 @@ def test_no_params() -> None:
     assert schema["additionalProperties"] is False
 
 
-def test_mixed_required_and_optional() -> None:
+def test_tool_input_schema_mixed_required_and_optional() -> None:
     def fn(a: str, b: int = 3) -> dict[str, Any]:
         """Mix of required and default params."""
         return {"a": a, "b": b}
@@ -33,7 +33,7 @@ def test_mixed_required_and_optional() -> None:
     assert schema["required"] == ["a"]
 
 
-def test_optional_not_required() -> None:
+def test_tool_input_schema_optional_not_required() -> None:
     def fn(name: Optional[str]) -> dict[str, Any]:
         """Optional[str] argument with no default."""
         return {"name": name}
@@ -43,7 +43,7 @@ def test_optional_not_required() -> None:
     assert "required" not in schema
 
 
-def test_list_of_strings() -> None:
+def test_tool_input_schema_list_of_strings() -> None:
     def fn(items: list[str]) -> dict[str, Any]:
         """List of strings."""
         return {"items": items}
@@ -55,7 +55,7 @@ def test_list_of_strings() -> None:
     }
 
 
-def test_dict_of_any() -> None:
+def test_tool_input_schema_dict_of_any() -> None:
     def fn(payload: dict[str, Any]) -> dict[str, Any]:
         """Dict argument."""
         return payload
@@ -64,7 +64,7 @@ def test_dict_of_any() -> None:
     assert schema["properties"]["payload"]["type"] == "object"
 
 
-def test_var_args_rejected() -> None:
+def test_tool_input_schema_var_args_rejected() -> None:
     def fn(*args: int) -> None:
         """Bad signature."""
 
@@ -72,7 +72,7 @@ def test_var_args_rejected() -> None:
         tool_input_schema(fn)
 
 
-def test_var_kwargs_rejected() -> None:
+def test_tool_input_schema_var_kwargs_rejected() -> None:
     def fn(**kwargs: int) -> None:
         """Bad signature."""
 
@@ -80,7 +80,7 @@ def test_var_kwargs_rejected() -> None:
         tool_input_schema(fn)
 
 
-def test_bool_and_float() -> None:
+def test_tool_input_schema_bool_and_float() -> None:
     def fn(flag: bool, ratio: float) -> None:
         """Bool and float."""
 
@@ -89,7 +89,7 @@ def test_bool_and_float() -> None:
     assert schema["properties"]["ratio"] == {"type": "number"}
 
 
-def test_unannotated_param_is_open_schema() -> None:
+def test_tool_input_schema_unannotated_param_is_open_schema() -> None:
     def fn(x) -> None:  # type: ignore[no-untyped-def]
         """Unannotated."""
 
@@ -98,7 +98,7 @@ def test_unannotated_param_is_open_schema() -> None:
     assert schema["required"] == ["x"]
 
 
-def test_real_browser_navigate_signature() -> None:
+def test_tool_input_schema_real_browser_navigate_signature() -> None:
     schema = tool_input_schema(TorBrowserDriver.browser_navigate)
     assert schema["properties"] == {"url": {"type": "string"}}
     assert schema["required"] == ["url"]
@@ -106,7 +106,7 @@ def test_real_browser_navigate_signature() -> None:
     assert "self" not in schema["properties"]
 
 
-def test_real_browser_wait_for_signature() -> None:
+def test_tool_input_schema_real_browser_wait_for_signature() -> None:
     schema = tool_input_schema(TorBrowserDriver.browser_wait_for)
     props = schema["properties"]
     assert "text" in props

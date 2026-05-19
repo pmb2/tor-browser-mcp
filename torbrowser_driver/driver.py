@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import secrets
 import shutil
+import socket
 import tempfile
 from contextlib import suppress
 from pathlib import Path
@@ -13,9 +15,6 @@ from types import TracebackType
 
 from selenium import webdriver
 from stem.control import Controller
-
-import secrets
-import socket
 
 from ._core_primitives import _CoreCapabilityMixin
 from ._diagnostics_primitives import _DiagnosticsCapabilityMixin

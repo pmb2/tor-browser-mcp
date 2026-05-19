@@ -204,22 +204,21 @@ def test_install_helper_token_mismatch_raises(
     assert driver.webdriver.execute_async_script.call_count >= 2
 
 
-def test_install_helper_timeout_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_install_helper_timeout_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     # Drop the install-time handshake deadline so the test does not sleep
     # for the full ten-second budget.
     monkeypatch.setattr(
         "torbrowser_driver._helper_extension_install._BRIDGE_HANDSHAKE_TIMEOUT",
         0.1,
     )
-    import tempfile
-    with tempfile.TemporaryDirectory() as tmp:
-        session_dir = Path(tmp)
-        (session_dir / "helper-extension.xpi").write_bytes(b"x")
-        driver = _FakeDriver(session_dir)
-        bridge = _FakeBridge(connect_immediately=False)
-        with pytest.raises(BrowserLaunchError):
-            install_helper(driver, MagicMock(name="config"), bridge)
-        assert bridge.close_called is True
+    (tmp_path / "helper-extension.xpi").write_bytes(b"x")
+    driver = _FakeDriver(tmp_path)
+    bridge = _FakeBridge(connect_immediately=False)
+    with pytest.raises(BrowserLaunchError):
+        install_helper(driver, MagicMock(name="config"), bridge)
+    assert bridge.close_called is True
 
 
 def test_install_helper_install_failure_closes_bridge(

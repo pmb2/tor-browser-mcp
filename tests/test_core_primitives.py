@@ -156,12 +156,17 @@ def test_browser_wait_for_text_succeeds(drv: TorBrowserDriver) -> None:
     assert result["waited"] == "text"
 
 
-def test_browser_wait_for_text_times_out(drv: TorBrowserDriver) -> None:
+def test_browser_wait_for_text_times_out(
+    drv: TorBrowserDriver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "torbrowser_driver._core_primitives._BROWSER_WAIT_POLL_INTERVAL", 0.001
+    )
     body = MagicMock()
     body.text = "nothing matches"
     drv.webdriver.find_elements.return_value = [body]
     with pytest.raises(BrowserTimeoutError):
-        drv.browser_wait_for(text="missing", timeout=0.3)
+        drv.browser_wait_for(text="missing", timeout=0.01)
 
 
 def test_browser_type_send_keys(drv: TorBrowserDriver) -> None:

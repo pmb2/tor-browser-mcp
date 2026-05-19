@@ -182,7 +182,7 @@ function orderedRoutes() {
 // "<all_urls>" plus the documented <scheme>://<host><path> shapes
 // (schemes: *, http, https, ws, wss, ftp, file; host: *, *.<suffix>,
 // literal, or empty for file://; path is a glob where * matches any
-// number of characters). Mirrors validate_match_pattern on the
+// number of characters). Mirrors _validate_match_pattern on the
 // driver side -- anything that side accepts must match here.
 function parsePattern(pattern) {
   if (pattern === "<all_urls>") {

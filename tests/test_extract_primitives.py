@@ -11,7 +11,7 @@ def test_extract_links_filters_substring(drv: TorBrowserDriver) -> None:
         {"href": "https://x.test/b", "text": "B", "title": None, "rel": None},
         {"href": "https://y.test/", "text": "Y", "title": None, "rel": None},
     ]
-    result = drv.browser_extract_links(filter="x.TEST")
+    result = drv.browser_extract_links(url_filter="x.TEST")
     hrefs = [link["href"] for link in result["links"]]
     assert hrefs == ["https://x.test/a", "https://x.test/b"]
 

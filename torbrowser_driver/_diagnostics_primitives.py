@@ -74,7 +74,7 @@ class _DiagnosticsCapabilityMixin:
     def browser_console_messages(
         self,
         level: str | None = None,
-        all: bool = False,
+        include_all: bool = False,
         filename: str | None = None,
     ) -> dict[str, Any]:
         """Return browser-log messages when geckodriver exposes them.
@@ -84,9 +84,9 @@ class _DiagnosticsCapabilityMixin:
         method returns a stub ``{"messages": [], "supported": False, ...}``
         so callers can still rely on a uniform shape. When the log is
         available, ``level`` filters to one of ``"INFO"``, ``"WARNING"``,
-        ``"SEVERE"``. ``all=False`` truncates to the most recent 100
-        entries; ``all=True`` returns every captured entry. ``filename``
-        writes the JSON to disk.
+        ``"SEVERE"``. ``include_all=False`` truncates to the most recent
+        100 entries; ``include_all=True`` returns every captured entry.
+        ``filename`` writes the JSON to disk.
         """
 
         drv = self._require_driver()
@@ -116,7 +116,7 @@ class _DiagnosticsCapabilityMixin:
             messages = [
                 m for m in messages if str(m.get("level", "")).upper() == wanted
             ]
-        if not all and len(messages) > _DEFAULT_CONSOLE_LIMIT:
+        if not include_all and len(messages) > _DEFAULT_CONSOLE_LIMIT:
             messages = messages[-_DEFAULT_CONSOLE_LIMIT:]
 
         payload = {"messages": messages, "supported": supported}
