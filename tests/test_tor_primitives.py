@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from selenium.common.exceptions import WebDriverException
 from stem import ControllerError, Signal
 
 from tests.conftest import _FakeConfig
@@ -99,8 +100,7 @@ def test_tor_circuit_status_parsing(drv: TorBrowserDriver) -> None:
 
 def test_tor_circuit_status_verbose(drv: TorBrowserDriver) -> None:
     drv.controller.get_info.return_value = (
-        "1 BUILT $AAAA~Alice BUILD_FLAGS=NEED_CAPACITY PURPOSE=GENERAL "
-        "TIME_CREATED=2025-01-01"
+        "1 BUILT $AAAA~Alice BUILD_FLAGS=NEED_CAPACITY PURPOSE=GENERAL TIME_CREATED=2025-01-01"
     )
     result = drv.tor_circuit_status(verbose=True)
     entry = result["circuits"][0]
@@ -118,10 +118,7 @@ def test_tor_circuit_status_limit(drv: TorBrowserDriver) -> None:
 
 
 def test_tor_stream_status_parsing(drv: TorBrowserDriver) -> None:
-    drv.controller.get_info.return_value = (
-        "12 SUCCEEDED 7 example.test:443\n"
-        "13 NEW 0 other.test:80"
-    )
+    drv.controller.get_info.return_value = "12 SUCCEEDED 7 example.test:443\n13 NEW 0 other.test:80"
     result = drv.tor_stream_status()
     assert result["count"] == 2
     assert result["total"] == 2
@@ -136,10 +133,7 @@ def test_tor_stream_status_parsing(drv: TorBrowserDriver) -> None:
 
 
 def test_tor_entry_guards_parsing(drv: TorBrowserDriver) -> None:
-    drv.controller.get_info.return_value = (
-        "Alice=$AAAA up\n"
-        "$BBBB never-connected"
-    )
+    drv.controller.get_info.return_value = "Alice=$AAAA up\n$BBBB never-connected"
     result = drv.tor_entry_guards()
     assert result["count"] == 2
     assert result["total"] == 2
@@ -154,23 +148,17 @@ def test_tor_entry_guards_parsing(drv: TorBrowserDriver) -> None:
 def test_tor_get_info_allowlist(drv: TorBrowserDriver) -> None:
     drv.controller.get_info.side_effect = lambda key: f"value-of-{key}"
     result = drv.tor_get_info(["version", "uptime"])
-    assert result == {
-        "info": {"version": "value-of-version", "uptime": "value-of-uptime"}
-    }
+    assert result == {"info": {"version": "value-of-version", "uptime": "value-of-uptime"}}
 
 
-def test_tor_get_info_file_output(
-    drv: TorBrowserDriver, policy: PathPolicy
-) -> None:
+def test_tor_get_info_file_output(drv: TorBrowserDriver, policy: PathPolicy) -> None:
     drv.controller.get_info.side_effect = lambda key: f"value-of-{key}"
     result = drv.tor_get_info(["version"], filename="tor-info.json")
     path = Path(result["path"])
     assert path == (policy.output_dir / "tor-info.json").resolve()
     assert result["keys"] == ["version"]
     assert "info" not in result
-    assert json.loads(path.read_text(encoding="utf-8")) == {
-        "info": {"version": "value-of-version"}
-    }
+    assert json.loads(path.read_text(encoding="utf-8")) == {"info": {"version": "value-of-version"}}
 
 
 def test_tor_get_info_large_inline_returns_summary(drv: TorBrowserDriver) -> None:
@@ -189,3 +177,151 @@ def test_tor_get_info_rejects_unknown_key(drv: TorBrowserDriver) -> None:
 def test_tor_resolve_not_implemented(drv: TorBrowserDriver) -> None:
     with pytest.raises(NotImplementedError):
         drv.tor_resolve("example.test")
+
+
+def _check_probe(
+    *,
+    on_text: str | None = None,
+    off_text: str | None = None,
+    headline: str = "",
+    body_text: str = "",
+    uri: str = "https://check.torproject.org/",
+    title: str = "",
+) -> dict[str, object]:
+    return {
+        "uri": uri,
+        "title": title,
+        "readyState": "complete",
+        "onText": on_text,
+        "offText": off_text,
+        "headlineText": headline,
+        "bodyText": body_text,
+    }
+
+
+def test_tor_check_identity_reports_headline_on_success(
+    drv: TorBrowserDriver,
+) -> None:
+    probe = _check_probe(
+        on_text="Congratulations. This browser is configured to use Tor.",
+        body_text=(
+            "Congratulations. This browser is configured to use Tor.\n"
+            "Your IP address appears to be: 192.0.2.42\n"
+            "Afrikaans, العربية, Azerbaijani, ..."
+        ),
+    )
+    drv.webdriver.execute_script.return_value = probe
+
+    result = drv.tor_check_identity(timeout=0.0, cache_buster=False)
+
+    assert result["is_tor"] is True
+    assert result["exit_ip"] == "192.0.2.42"
+    assert result["headline"] == ("Congratulations. This browser is configured to use Tor.")
+    assert result["body_excerpt"].startswith("Congratulations.")
+    assert "Afrikaans" not in result["body_excerpt"]
+    assert result["fetch_error"] is None
+
+
+def test_tor_check_identity_reports_headline_on_not_tor(
+    drv: TorBrowserDriver,
+) -> None:
+    probe = _check_probe(
+        off_text="Sorry. You are not using Tor.",
+        body_text=(
+            "Sorry. You are not using Tor.\n"
+            "Your IP address appears to be: 203.0.113.7\n"
+            "Afrikaans, العربية, ..."
+        ),
+    )
+    drv.webdriver.execute_script.return_value = probe
+
+    result = drv.tor_check_identity(timeout=0.0, cache_buster=False)
+
+    assert result["is_tor"] is False
+    assert result["exit_ip"] is None
+    assert result["headline"] == "Sorry. You are not using Tor."
+    assert result["body_excerpt"].startswith("Sorry.")
+    assert "Afrikaans" not in result["body_excerpt"]
+    assert result["fetch_error"] is None
+
+
+def test_tor_check_identity_flags_502_as_fetch_error(monkeypatch, drv: TorBrowserDriver) -> None:
+    import torbrowser_driver._tor_primitives as tor_mod
+
+    monkeypatch.setattr(tor_mod.time, "sleep", lambda _s: None)
+    probe = _check_probe(
+        title="502 Bad Gateway",
+        headline="502 Bad Gateway",
+        body_text="502 Bad Gateway\nconnection closed",
+    )
+    drv.webdriver.execute_script.return_value = probe
+
+    result = drv.tor_check_identity(timeout=0.05, cache_buster=False)
+
+    assert result["is_tor"] is None
+    assert result["exit_ip"] is None
+    assert result["fetch_error"] is not None
+    assert "502" in result["fetch_error"]
+    assert "502" in result["body_excerpt"]
+
+
+def test_tor_check_identity_flags_neterror_page(monkeypatch, drv: TorBrowserDriver) -> None:
+    import torbrowser_driver._tor_primitives as tor_mod
+
+    monkeypatch.setattr(tor_mod.time, "sleep", lambda _s: None)
+    probe = _check_probe(
+        uri="about:neterror?e=proxyConnectFailure&u=https%3A//check.torproject.org/",
+        title="Problem loading page",
+        body_text="Unable to connect",
+    )
+    drv.webdriver.execute_script.return_value = probe
+
+    result = drv.tor_check_identity(timeout=0.05, cache_buster=False)
+
+    assert result["is_tor"] is None
+    assert result["fetch_error"] is not None
+    assert result["fetch_error"].startswith("firefox-error-page")
+
+
+def test_tor_check_identity_flags_timeout_without_headline(
+    monkeypatch, drv: TorBrowserDriver
+) -> None:
+    import torbrowser_driver._tor_primitives as tor_mod
+
+    monkeypatch.setattr(tor_mod.time, "sleep", lambda _s: None)
+    drv.webdriver.execute_script.return_value = _check_probe(body_text="")
+
+    result = drv.tor_check_identity(timeout=0.05, cache_buster=False)
+
+    assert result["is_tor"] is None
+    assert result["fetch_error"] == "blank-document"
+
+
+def test_tor_check_identity_handles_navigation_failure(
+    drv: TorBrowserDriver,
+) -> None:
+    drv.webdriver.get.side_effect = WebDriverException("dns failure")
+
+    result = drv.tor_check_identity(timeout=0.0, cache_buster=False)
+
+    assert result["is_tor"] is None
+    assert result["exit_ip"] is None
+    assert result["fetch_error"] is not None
+    assert result["fetch_error"].startswith("navigation-failed")
+    assert result["body_excerpt"] == ""
+    assert drv.webdriver.execute_script.call_count == 0
+
+
+def test_tor_check_identity_cache_buster_appends_query(
+    drv: TorBrowserDriver,
+) -> None:
+    drv.webdriver.execute_script.return_value = _check_probe(
+        on_text="Congratulations. This browser is configured to use Tor.",
+        body_text="Your IP address appears to be: 192.0.2.1",
+    )
+
+    drv.tor_check_identity(timeout=0.0, cache_buster=True)
+
+    drv.webdriver.get.assert_called_once()
+    called_url = drv.webdriver.get.call_args.args[0]
+    assert called_url.startswith("https://check.torproject.org/?_=")

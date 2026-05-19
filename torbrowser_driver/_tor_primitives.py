@@ -13,7 +13,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any
 
-from selenium.webdriver.common.by import By
+from selenium.common.exceptions import WebDriverException
 from stem import ControllerError, Signal
 
 from ._primitive_helpers import _bounded_inline_json, _limit_items
@@ -27,10 +27,101 @@ if TYPE_CHECKING:
     from .config import DriverConfig
 
 
-_IP_RE = re.compile(
-    r"(?:Your IP address appears to be|Your IP address is)[:\s]+([0-9a-fA-F:.]+)"
-)
+_IP_RE = re.compile(r"(?:Your IP address appears to be|Your IP address is)[:\s]+([0-9a-fA-F:.]+)")
 _ANY_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+_HTTP_ERROR_RE = re.compile(r"\b([45]\d{2})\b(?:\s+([A-Za-z][A-Za-z ]{1,40}))?")
+
+
+_CHECK_PROBE_JS = """
+const onEl = document.querySelector('h1.on');
+const offEl = document.querySelector('h1.off');
+const headlineEl = onEl || offEl || document.querySelector('h1');
+const bodyEl = document.body;
+return {
+  uri: document.documentURI || '',
+  title: document.title || '',
+  readyState: document.readyState || '',
+  onText: onEl ? (onEl.innerText || onEl.textContent || '') : null,
+  offText: offEl ? (offEl.innerText || offEl.textContent || '') : null,
+  headlineText: headlineEl ? (headlineEl.innerText || headlineEl.textContent || '') : '',
+  bodyText: bodyEl ? (bodyEl.innerText || bodyEl.textContent || '') : '',
+};
+"""
+
+
+def _parse_check_result(probe: dict[str, Any]) -> dict[str, Any]:
+    """Turn a check.torproject.org DOM probe into the public return shape.
+
+    ``is_tor`` is ``True`` only when the page rendered the ``h1.on``
+    headline; ``False`` only when it rendered ``h1.off``. Any other state
+    (Firefox neterror page, HTTP 4xx/5xx body, blank document, timeout
+    before the headline arrived) is reported as ``is_tor=None`` with a
+    populated ``fetch_error`` so callers cannot mistake a failed fetch for
+    a confirmed not-on-Tor verdict.
+    """
+
+    uri = str(probe.get("uri") or "")
+    title = str(probe.get("title") or "")
+    on_text = probe.get("onText")
+    off_text = probe.get("offText")
+    headline = str(probe.get("headlineText") or "").strip()
+    body_text = str(probe.get("bodyText") or "")
+
+    if on_text:
+        excerpt = str(on_text).strip()
+        exit_ip = _extract_exit_ip(body_text)
+        return {
+            "is_tor": True,
+            "exit_ip": exit_ip,
+            "headline": excerpt,
+            "body_excerpt": excerpt[:500],
+            "fetch_error": None,
+        }
+    if off_text:
+        excerpt = str(off_text).strip()
+        return {
+            "is_tor": False,
+            "exit_ip": None,
+            "headline": excerpt,
+            "body_excerpt": excerpt[:500],
+            "fetch_error": None,
+        }
+
+    fetch_error = _diagnose_fetch_error(uri, title, headline, body_text)
+    excerpt = (headline or body_text).strip()[:500]
+    return {
+        "is_tor": None,
+        "exit_ip": None,
+        "headline": headline or None,
+        "body_excerpt": excerpt,
+        "fetch_error": fetch_error,
+    }
+
+
+def _diagnose_fetch_error(uri: str, title: str, headline: str, body_text: str) -> str:
+    """Classify a non-success page from check.torproject.org."""
+
+    if uri.startswith("about:neterror") or uri.startswith("about:certerror"):
+        return f"firefox-error-page: {uri}"
+    haystack = f"{title}\n{headline}\n{body_text}"
+    match = _HTTP_ERROR_RE.search(haystack)
+    if match:
+        code = match.group(1)
+        reason = (match.group(2) or "").strip()
+        return f"http-{code}" + (f" {reason}" if reason else "")
+    if not body_text.strip():
+        return "blank-document"
+    return "headline-not-found"
+
+
+def _extract_exit_ip(body_text: str) -> str | None:
+    match = _IP_RE.search(body_text)
+    if match:
+        return match.group(1)
+    any_match = _ANY_IPV4_RE.search(body_text)
+    if any_match:
+        return any_match.group(0)
+    return None
 
 
 _GETINFO_ALLOWLIST: frozenset[str] = frozenset(
@@ -188,9 +279,7 @@ class _TorCapabilityMixin:
         try:
             ctrl = self._require_controller()
             bootstrap = ctrl.get_info("status/bootstrap-phase")
-            circuit_established = (
-                ctrl.get_info("status/circuit-established") == "1"
-            )
+            circuit_established = ctrl.get_info("status/circuit-established") == "1"
             version = str(ctrl.get_version())
             is_alive = bool(ctrl.is_alive())
         except ControllerError as exc:
@@ -214,13 +303,25 @@ class _TorCapabilityMixin:
     ) -> dict[str, Any]:
         """Navigate to ``check.torproject.org`` and report routing status.
 
-        Returns ``is_tor`` (``True`` when the page reports the connection
-        as Tor), ``exit_ip`` (parsed from the page body when present), and
-        ``body_excerpt`` (first ~500 characters of body text for
-        debugging). ``cache_buster`` appends a millisecond query string so
-        repeated calls do not hit Firefox's cache. The poll waits up to
-        ``timeout`` seconds for either ``"Congratulations"`` or ``"Sorry"``
-        to appear.
+        Returns ``is_tor`` (``True`` when check.torproject.org renders the
+        ``h1.on`` "Congratulations" headline, ``False`` when it renders the
+        ``h1.off`` "Sorry" headline, and ``None`` when neither headline was
+        observed), ``exit_ip`` (parsed from the page body when present),
+        ``headline`` (the headline text the site rendered, or ``None``),
+        ``body_excerpt`` (first ~500 characters of the relevant headline or
+        body text for debugging), and ``fetch_error`` (a short string
+        identifying why the check failed, or ``None`` on a clean fetch).
+
+        ``is_tor`` is reserved for the case where the check page actually
+        rendered a verdict. A fetch failure (HTTP 5xx from the exit's
+        upstream, a Firefox neterror page, a navigation exception, or a
+        timeout before either headline appears) is reported as ``is_tor=
+        None`` with ``fetch_error`` populated so callers do not mistake a
+        failed fetch for a confirmed not-on-Tor verdict.
+
+        ``cache_buster`` appends a millisecond query string so repeated
+        calls do not hit Firefox's cache. The poll waits up to ``timeout``
+        seconds for the ``h1.on``/``h1.off`` headline.
         """
 
         drv = self._require_driver()
@@ -228,37 +329,34 @@ class _TorCapabilityMixin:
         if cache_buster:
             url = f"{url}?_={int(time.time() * 1000)}"
 
-        drv.get(url)
+        try:
+            drv.get(url)
+        except WebDriverException as exc:
+            return {
+                "is_tor": None,
+                "exit_ip": None,
+                "headline": None,
+                "body_excerpt": "",
+                "fetch_error": f"navigation-failed: {exc.__class__.__name__}: {exc}",
+            }
+
         deadline = time.monotonic() + timeout
-        body_text = ""
-        while time.monotonic() < deadline:
-            elements = drv.find_elements(By.TAG_NAME, "body")
-            if elements:
-                body_text = elements[0].text or ""
-                if "Congratulations" in body_text or "Sorry" in body_text:
-                    break
+        probe: dict[str, Any] = {}
+        while True:
+            try:
+                probe = dict(drv.execute_script(_CHECK_PROBE_JS) or {})
+            except WebDriverException:
+                probe = {}
+            if probe.get("onText") or probe.get("offText"):
+                break
+            if time.monotonic() >= deadline:
+                break
             time.sleep(1.0)
 
-        is_tor = "Congratulations" in body_text
-        exit_ip: str | None = None
-        match = _IP_RE.search(body_text)
-        if match:
-            exit_ip = match.group(1)
-        else:
-            any_match = _ANY_IPV4_RE.search(body_text)
-            if any_match:
-                exit_ip = any_match.group(0)
-
-        return {
-            "is_tor": is_tor,
-            "exit_ip": exit_ip,
-            "body_excerpt": body_text[:500],
-        }
+        return _parse_check_result(probe)
 
     @capability("tor")
-    def tor_new_identity(
-        self, wait: bool = True, post_signal_sleep: float = 8.0
-    ) -> dict[str, Any]:
+    def tor_new_identity(self, wait: bool = True, post_signal_sleep: float = 8.0) -> dict[str, Any]:
         """Send NEWNYM to request a fresh tor circuit; tor enforces a
         ten-second cooldown between NEWNYM signals.
 
@@ -326,11 +424,7 @@ class _TorCapabilityMixin:
 
         ctrl = self._require_controller()
         raw = ctrl.get_info("stream-status") or ""
-        streams = [
-            _parse_stream_line(line)
-            for line in raw.splitlines()
-            if line.strip()
-        ]
+        streams = [_parse_stream_line(line) for line in raw.splitlines() if line.strip()]
         total = len(streams)
         selected, truncated = _limit_items(streams, limit)
         return {
@@ -353,11 +447,7 @@ class _TorCapabilityMixin:
 
         ctrl = self._require_controller()
         raw = ctrl.get_info("entry-guards") or ""
-        guards = [
-            _parse_guard_line(line)
-            for line in raw.splitlines()
-            if line.strip()
-        ]
+        guards = [_parse_guard_line(line) for line in raw.splitlines() if line.strip()]
         total = len(guards)
         selected, truncated = _limit_items(guards, limit)
         return {

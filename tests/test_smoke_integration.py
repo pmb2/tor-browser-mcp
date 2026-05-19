@@ -46,7 +46,11 @@ def test_boot_check_newnym_teardown(
         assert isinstance(circuits["circuits"], list)
 
         first = drv.tor_check_identity(timeout=120.0)
-        assert first["is_tor"], f"Tor check did not pass: {first['body_excerpt']!r}"
+        assert first["is_tor"], (
+            "Tor check did not pass: "
+            f"fetch_error={first.get('fetch_error')!r} "
+            f"body_excerpt={first['body_excerpt']!r}"
+        )
         assert first["exit_ip"], "no exit IP parsed from check page"
 
         metadata = drv.browser_extract_metadata()
