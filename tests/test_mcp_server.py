@@ -19,14 +19,14 @@ def _run(coro):
 
 
 def test_registered_tool_names_match_driver_core() -> None:
-    driver = MagicMock()
+    driver = MagicMock(spec=TorBrowserDriver)
     server, registry = build_server(driver, {"core"})
     expected = set(registered_methods(TorBrowserDriver, {"core"}).keys())
     assert set(registry.names()) == expected
 
 
 def test_list_tools_returns_tool_objects() -> None:
-    driver = MagicMock()
+    driver = MagicMock(spec=TorBrowserDriver)
     server, registry = build_server(driver, {"core"})
     tools = registry.list_tools()
     assert tools, "expected at least one core tool"
@@ -37,7 +37,7 @@ def test_list_tools_returns_tool_objects() -> None:
 
 
 def test_call_tool_dispatches_to_driver() -> None:
-    driver = MagicMock()
+    driver = MagicMock(spec=TorBrowserDriver)
     driver.browser_navigate.return_value = {"url": "https://example.com", "title": "x"}
     server, registry = build_server(driver, {"core"})
 
@@ -49,7 +49,7 @@ def test_call_tool_dispatches_to_driver() -> None:
 
 
 def test_call_tool_via_server_handler_returns_text_content() -> None:
-    driver = MagicMock()
+    driver = MagicMock(spec=TorBrowserDriver)
     driver.browser_navigate.return_value = {"url": "https://example.com", "title": "x"}
     server, _ = build_server(driver, {"core"})
 
@@ -62,7 +62,7 @@ def test_call_tool_via_server_handler_returns_text_content() -> None:
 
 
 def test_call_tool_artifact_path_emits_second_block(tmp_path) -> None:
-    driver = MagicMock()
+    driver = MagicMock(spec=TorBrowserDriver)
     driver.browser_take_screenshot.return_value = {
         "path": str(tmp_path / "shot.png"),
         "bytes": 42,
@@ -75,7 +75,7 @@ def test_call_tool_artifact_path_emits_second_block(tmp_path) -> None:
 
 
 def test_call_tool_exception_becomes_error_result() -> None:
-    driver = MagicMock()
+    driver = MagicMock(spec=TorBrowserDriver)
     driver.browser_navigate.side_effect = RuntimeError("nope")
     server, _ = build_server(driver, {"core"})
 
@@ -88,7 +88,7 @@ def test_call_tool_exception_becomes_error_result() -> None:
 
 
 def test_unknown_tool_returns_error_result() -> None:
-    driver = MagicMock()
+    driver = MagicMock(spec=TorBrowserDriver)
     server, _ = build_server(driver, {"core"})
     handler = _call_tool_handler(server)
     result = _run(handler("does_not_exist", {}))
@@ -97,7 +97,7 @@ def test_unknown_tool_returns_error_result() -> None:
 
 
 def test_extra_tools_registered() -> None:
-    driver = MagicMock()
+    driver = MagicMock(spec=TorBrowserDriver)
 
     def hello() -> dict:
         return {"ok": True}
@@ -115,7 +115,7 @@ def test_extra_tools_registered() -> None:
 
 
 def test_enabled_caps_filter() -> None:
-    driver = MagicMock()
+    driver = MagicMock(spec=TorBrowserDriver)
     _, core_only = build_server(driver, {"core"})
     _, with_extract = build_server(driver, {"core", "extract"})
     assert set(with_extract.names()) > set(core_only.names())

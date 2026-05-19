@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import selenium.webdriver.firefox.webdriver
 
 from torbrowser_driver import PathPolicy, TorBrowserDriver
 from torbrowser_driver._proxy_intercept_substrate import FlowRecorder
@@ -57,7 +58,11 @@ def drv(policy: PathPolicy) -> TorBrowserDriver:
 
     instance = TorBrowserDriver.__new__(TorBrowserDriver)
     instance.config = _FakeConfig(path_policy=policy)  # type: ignore[assignment]
-    instance.webdriver = MagicMock(name="webdriver")
+    instance.webdriver = MagicMock(
+        spec=selenium.webdriver.firefox.webdriver.WebDriver,
+        name="webdriver",
+    )
+    instance.webdriver.get_log = MagicMock(name="get_log")
     instance.controller = None
     instance._closed = False
     instance._tor_process = None
