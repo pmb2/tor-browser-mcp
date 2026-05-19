@@ -40,6 +40,7 @@ from selenium.webdriver.firefox.firefox_profile import FirefoxProfile
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.firefox.service import Service
 
+from ._process_guardian import ProcessGuardian
 from .exceptions import BrowserLaunchError
 
 if TYPE_CHECKING:
@@ -336,5 +337,10 @@ def launch_browser(
         raise BrowserLaunchError(
             f"geckodriver/Tor Browser failed to start: {exc}"
         ) from exc
+
+    gecko_proc = getattr(service, "process", None)
+    gecko_pid = getattr(gecko_proc, "pid", None)
+    if isinstance(gecko_pid, int):
+        ProcessGuardian.instance().adopt(gecko_pid)
 
     return driver, session_dir

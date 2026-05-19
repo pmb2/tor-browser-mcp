@@ -103,6 +103,7 @@ class TorBrowserDriver(
         self._policies_snapshot_dir: Path | None = None
 
     def __enter__(self) -> TorBrowserDriver:
+        _reap_stale_session_dirs()
         self._session_dir = Path(tempfile.mkdtemp(prefix="torbrowser-driver-"))
         self._owns_session_dir = True
 
@@ -274,3 +275,47 @@ class TorBrowserDriver(
         if self._owns_session_dir and self._session_dir is not None:
             with suppress(Exception):
                 shutil.rmtree(self._session_dir, ignore_errors=True)
+
+
+_STALE_SESSION_DIR_MAX_AGE_SECONDS = 24 * 3600
+
+
+def _reap_stale_session_dirs(
+    *,
+    tempdir: Path | None = None,
+    max_age_seconds: float = _STALE_SESSION_DIR_MAX_AGE_SECONDS,
+) -> list[Path]:
+    """Delete abandoned ``torbrowser-driver-*`` temp dirs older than ``max_age_seconds``.
+
+    Best-effort: any error during enumeration or removal is suppressed.
+    Returns the list of paths that were removed (mainly for tests).
+    """
+
+    import time
+
+    base = tempdir if tempdir is not None else Path(tempfile.gettempdir())
+    now = time.time()
+    removed: list[Path] = []
+    try:
+        candidates = list(base.iterdir())
+    except OSError:
+        return removed
+    for entry in candidates:
+        if not entry.name.startswith("torbrowser-driver-"):
+            continue
+        try:
+            age = now - entry.stat().st_mtime
+        except OSError:
+            continue
+        if age < max_age_seconds:
+            continue
+        try:
+            if entry.is_dir():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink(missing_ok=True)
+        except OSError:
+            continue
+        else:
+            removed.append(entry)
+    return removed
