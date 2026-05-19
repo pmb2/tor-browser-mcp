@@ -291,6 +291,72 @@ def test_browser_snapshot_large_inline_returns_summary(drv: TorBrowserDriver) ->
     assert "snapshot" not in result
 
 
+def test_browser_snapshot_filename_returns_summary_not_tree(
+    drv: TorBrowserDriver, tmp_path: Path
+) -> None:
+    tree = {
+        "tag": "html",
+        "role": None,
+        "name": None,
+        "text": None,
+        "bounds": None,
+        "children": [
+            {
+                "tag": "body",
+                "role": None,
+                "name": None,
+                "text": None,
+                "bounds": None,
+                "children": [
+                    {
+                        "tag": "h1",
+                        "role": "heading",
+                        "name": "Title",
+                        "text": "Title",
+                        "bounds": None,
+                        "children": [],
+                    },
+                    {
+                        "tag": "p",
+                        "role": None,
+                        "name": None,
+                        "text": "body",
+                        "bounds": None,
+                        "children": [],
+                    },
+                ],
+            },
+        ],
+    }
+    drv.webdriver.execute_script.return_value = tree
+    result = drv.browser_snapshot(filename="snap.json")
+    assert "snapshot" not in result
+    assert "children" not in result
+    assert result["node_count"] == 4
+    assert result["max_depth_reached"] == 2
+    assert result["root_tag"] == "html"
+    assert result["root_role"] is None
+    written = Path(result["path"])
+    assert written.exists()
+    assert json.loads(written.read_text(encoding="utf-8")) == tree
+    assert result["bytes"] == written.stat().st_size
+
+
+def test_browser_snapshot_default_depth_is_modest(drv: TorBrowserDriver) -> None:
+    drv.webdriver.execute_script.return_value = {
+        "tag": "html",
+        "role": None,
+        "name": None,
+        "text": None,
+        "bounds": None,
+        "children": [],
+    }
+    drv.browser_snapshot()
+    _, args, _ = drv.webdriver.execute_script.mock_calls[0]
+    # signature: (script, root_el, depth, boxes)
+    assert args[2] <= 4
+
+
 def test_browser_evaluate_async_uses_async_script(drv: TorBrowserDriver) -> None:
     drv.webdriver.execute_async_script.return_value = 7
     result = drv.browser_evaluate_async("cb(7)")

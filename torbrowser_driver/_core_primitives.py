@@ -151,6 +151,32 @@ return walk(root, maxDepth);
 """
 
 
+def _summarize_snapshot_tree(tree: Any) -> dict[str, Any]:
+    """Walk a snapshot tree and return a small structural summary."""
+
+    node_count = 0
+    max_depth_reached = 0
+
+    def _visit(node: Any, depth: int) -> None:
+        nonlocal node_count, max_depth_reached
+        if not isinstance(node, dict):
+            return
+        node_count += 1
+        if depth > max_depth_reached:
+            max_depth_reached = depth
+        for child in node.get("children", []) or []:
+            _visit(child, depth + 1)
+
+    _visit(tree, 0)
+    root = tree if isinstance(tree, dict) else {}
+    return {
+        "node_count": node_count,
+        "max_depth_reached": max_depth_reached,
+        "root_tag": root.get("tag"),
+        "root_role": root.get("role"),
+    }
+
+
 class FormFillField(TypedDict):
     selector: str
     value: str | bool
@@ -295,7 +321,7 @@ class _CoreCapabilityMixin:
     def browser_snapshot(
         self,
         selector: str | None = None,
-        depth: int = 8,
+        depth: int = 4,
         boxes: bool = False,
         filename: str | None = None,
     ) -> dict[str, Any]:
@@ -306,8 +332,17 @@ class _CoreCapabilityMixin:
         are inferred from a small set of ARIA attributes and tag heuristics,
         so this is **not** equivalent to a true accessibility-tree
         snapshot - it is a cheap, transport-safe summary built via
-        ``execute_script``. When ``filename`` is given the JSON is written
-        to disk under :attr:`PathPolicy.output_dir`.
+        ``execute_script``.
+
+        When ``filename`` is given the JSON tree is written to disk under
+        :attr:`PathPolicy.output_dir` and the return value carries only
+        artifact metadata plus a small structural summary
+        (``path``, ``bytes``, ``node_count``, ``max_depth_reached``,
+        ``root_tag``, ``root_role``) -- not the tree itself, which can
+        run into hundreds of kilobytes on real pages. Without ``filename``
+        the full tree is returned inline, subject to the structured
+        inline cap; pages routinely exceed that, so ``filename`` plus a
+        modest ``depth`` is the recommended shape.
         """
 
         drv = self._require_driver()
@@ -317,7 +352,12 @@ class _CoreCapabilityMixin:
             path = self.config.path_policy.resolve_output(filename)
             data = json.dumps(tree, ensure_ascii=False).encode("utf-8")
             path.write_bytes(data)
-            return {"path": str(path), "bytes": len(data)}
+            summary = _summarize_snapshot_tree(tree)
+            return {
+                "path": str(path),
+                "bytes": len(data),
+                **summary,
+            }
         return _bounded_inline_json("snapshot", tree)
 
     @capability("core")
