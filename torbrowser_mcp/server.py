@@ -14,7 +14,6 @@ import asyncio
 import inspect
 import json
 import logging
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -185,7 +184,7 @@ def build_server(
 
     enabled_set = frozenset(enabled_caps)
     if "proxy-intercept" in enabled_set:
-        print(PROXY_INTERCEPT_STARTUP_WARNING, file=sys.stderr)
+        log.warning(PROXY_INTERCEPT_STARTUP_WARNING)
 
     registry = _ToolRegistry()
 
