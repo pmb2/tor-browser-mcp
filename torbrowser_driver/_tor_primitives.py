@@ -347,15 +347,18 @@ class _TorCapabilityMixin:
             info[key] = ctrl.get_info(key)
         return {"info": info}
 
-    @capability("tor")
     def tor_resolve(self, hostname: str, reverse: bool = False) -> dict[str, Any]:
-        """Resolve ``hostname`` through tor (``RESOLVE`` / reverse ``RESOLVE``).
+        """Placeholder for tor DNS resolution; not implemented and not
+        exposed as an MCP capability tool. Calling it raises
+        :class:`NotImplementedError`.
 
-        Not implemented in this layer. Stem's high-level API does not expose
-        a one-call DNS helper, and a robust implementation needs to listen
-        for an ``ADDRMAP`` event alongside the ``RESOLVE`` command. The MCP
-        layer (or a future revision of this driver) is the right place for
-        that bookkeeping.
+        Stem's high-level API does not expose a one-call DNS helper, and a
+        robust ``RESOLVE`` / reverse ``RESOLVE`` implementation needs to
+        listen for an ``ADDRMAP`` event alongside the ``RESOLVE`` command.
+        The MCP layer (or a future revision of this driver) is the right
+        place for that bookkeeping; until then the method stays as a
+        documented placeholder rather than a live tool that would always
+        return ``isError=True``.
         """
 
         raise NotImplementedError(

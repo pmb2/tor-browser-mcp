@@ -110,7 +110,6 @@ EXPECTED_TOR_METHODS: frozenset[str] = frozenset(
         "tor_stream_status",
         "tor_entry_guards",
         "tor_get_info",
-        "tor_resolve",
     }
 )
 
