@@ -47,10 +47,10 @@ class _TorRoutingCapabilityMixin:
     """
 
     if TYPE_CHECKING:
-        controller: "Controller | None"
-        config: "DriverConfig"
+        controller: Controller | None
+        config: DriverConfig
 
-    def _require_controller(self) -> "Controller":
+    def _require_controller(self) -> Controller:
         ctrl = getattr(self, "controller", None)
         if ctrl is None:
             raise TorBrowserDriverError(

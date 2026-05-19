@@ -9,7 +9,6 @@ import pytest
 
 from torbrowser_driver import PathPolicy, TorBrowserDriver, TorBrowserDriverError
 
-
 _PDF_BYTES = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\nfake-content"
 _PDF_B64 = base64.b64encode(_PDF_BYTES).decode("ascii")
 

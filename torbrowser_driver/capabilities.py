@@ -10,10 +10,12 @@ always callable from Python regardless of ``DriverConfig.enabled_caps``.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any
 
 from .exceptions import DriverConfigError
 
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
 
 DEFAULT_CAPABILITIES: frozenset[str] = frozenset(
     {"core", "state", "extract", "diagnostics", "tor", "network-observe"}

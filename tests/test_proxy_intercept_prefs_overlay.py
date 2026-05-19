@@ -12,7 +12,6 @@ from torbrowser_driver.browser_process import (
     _proxy_intercept_prefs_overlay,
 )
 
-
 _REPLACED_KEYS = {
     "network.proxy.type",
     "network.proxy.socks",
@@ -34,7 +33,7 @@ _NEW_KEYS = {
 }
 
 
-@pytest.fixture()
+@pytest.fixture
 def base_config(tmp_path: Path, fake_tbb_layout: Path) -> DriverConfig:
     policy = PathPolicy.from_config(output_dir=tmp_path / "out", cwd=tmp_path)
     return DriverConfig(
@@ -48,8 +47,8 @@ def base_config(tmp_path: Path, fake_tbb_layout: Path) -> DriverConfig:
 
 def test_overlay_contains_all_replaced_and_new_keys(base_config: DriverConfig) -> None:
     overlay = _proxy_intercept_prefs_overlay(base_config)
-    assert _REPLACED_KEYS <= overlay.keys()
-    assert _NEW_KEYS <= overlay.keys()
+    assert overlay.keys() >= _REPLACED_KEYS
+    assert overlay.keys() >= _NEW_KEYS
 
 
 def test_overlay_values(base_config: DriverConfig) -> None:

@@ -12,7 +12,6 @@ import pytest
 from torbrowser_driver._proxy_intercept_ca import generate_session_ca
 from torbrowser_driver.exceptions import ProxyInterceptError
 
-
 pytest.importorskip("mitmproxy")
 
 

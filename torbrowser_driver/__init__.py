@@ -41,24 +41,25 @@ from .exceptions import (
 from .path_policy import PathPolicy
 
 try:
-    from importlib.metadata import PackageNotFoundError, version as _v
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _v
 
     __version__ = _v("torbrowser-mcp")
 except PackageNotFoundError:
     __version__ = "0.0.0"
 
 __all__ = [
+    "DEFAULT_CAPABILITIES",
+    "KNOWN_CAPABILITIES",
+    "OPTIONAL_CAPABILITIES",
     "BrowserLaunchError",
     "BrowserTimeoutError",
-    "DEFAULT_CAPABILITIES",
     "DriverConfig",
     "DriverConfigError",
     "HelperBridgeDisconnected",
     "HelperBridgeTimeout",
     "HelperExtensionError",
     "HelperUnavailable",
-    "KNOWN_CAPABILITIES",
-    "OPTIONAL_CAPABILITIES",
     "PathNotAllowed",
     "PathPolicy",
     "ProxyInterceptError",

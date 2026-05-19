@@ -12,11 +12,14 @@ from __future__ import annotations
 import platform
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import TYPE_CHECKING, Any, Literal
 
 from .exceptions import DriverConfigError
-from .path_policy import PathPolicy
 
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from .path_policy import PathPolicy
 
 ProfileMode = Literal["ephemeral", "persistent"]
 

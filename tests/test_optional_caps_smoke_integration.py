@@ -14,8 +14,8 @@ existing driver-level smoke (9250/9251) or the MCP wire smoke
 from __future__ import annotations
 
 import base64
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 
@@ -25,7 +25,6 @@ from torbrowser_driver import (
     PathPolicy,
     TorBrowserDriver,
 )
-
 
 pytestmark = pytest.mark.integration
 

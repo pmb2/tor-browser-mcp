@@ -6,14 +6,18 @@ import logging
 import threading
 from contextlib import suppress
 from pathlib import Path
-from subprocess import Popen
-from typing import Callable
+from typing import TYPE_CHECKING
 
 import stem.process
 from stem.control import Controller
 
-from .config import DriverConfig
 from .exceptions import DriverConfigError, TorBootstrapTimeout
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from subprocess import Popen
+
+    from .config import DriverConfig
 
 log = logging.getLogger(__name__)
 
@@ -98,12 +102,15 @@ def launch_tor(
     # running, hold here until the watchdog fires. In practice stem already
     # blocks until bootstrap completes; the timer is a safety net for the
     # Windows path where stem's own timeout argument is unavailable.
-    if not bootstrap_done.is_set() and process.poll() is None:
-        if not bootstrap_done.wait(timeout=bootstrap_timeout):
-            _terminate(process)
-            raise TorBootstrapTimeout(
-                f"tor did not finish bootstrapping in {bootstrap_timeout:.0f} seconds"
-            )
+    if (
+        not bootstrap_done.is_set()
+        and process.poll() is None
+        and not bootstrap_done.wait(timeout=bootstrap_timeout)
+    ):
+        _terminate(process)
+        raise TorBootstrapTimeout(
+            f"tor did not finish bootstrapping in {bootstrap_timeout:.0f} seconds"
+        )
 
     try:
         controller = Controller.from_port(

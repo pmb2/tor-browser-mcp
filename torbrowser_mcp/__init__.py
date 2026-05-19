@@ -11,7 +11,8 @@ asyncio event loop against an already-built :class:`DriverConfig`, and
 from __future__ import annotations
 
 try:
-    from importlib.metadata import PackageNotFoundError, version as _v
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _v
 
     __version__ = _v("torbrowser-mcp")
 except PackageNotFoundError:

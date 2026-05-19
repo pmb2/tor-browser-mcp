@@ -10,11 +10,7 @@ import socket
 import tempfile
 from contextlib import suppress
 from pathlib import Path
-from subprocess import Popen
-from types import TracebackType
-
-from selenium import webdriver
-from stem.control import Controller
+from typing import TYPE_CHECKING
 
 from ._core_primitives import _CoreCapabilityMixin
 from ._diagnostics_primitives import _DiagnosticsCapabilityMixin
@@ -43,9 +39,17 @@ from ._tor_routing_primitives import _TorRoutingCapabilityMixin
 from ._unsafe_primitives import _UnsafeCapabilityMixin
 from ._vision_primitives import _VisionCapabilityMixin
 from .browser_process import launch_browser
-from .config import DriverConfig
 from .exceptions import BrowserLaunchError, ProxyInterceptError
 from .tor_process import launch_tor, shutdown_tor
+
+if TYPE_CHECKING:
+    from subprocess import Popen
+    from types import TracebackType
+
+    from selenium import webdriver
+    from stem.control import Controller
+
+    from .config import DriverConfig
 
 log = logging.getLogger(__name__)
 
@@ -98,7 +102,7 @@ class TorBrowserDriver(
         self._proxy_ca_fingerprint: str | None = None
         self._policies_snapshot_dir: Path | None = None
 
-    def __enter__(self) -> "TorBrowserDriver":
+    def __enter__(self) -> TorBrowserDriver:
         self._session_dir = Path(tempfile.mkdtemp(prefix="torbrowser-driver-"))
         self._owns_session_dir = True
 

@@ -18,7 +18,6 @@ from typing import Any
 
 from .exceptions import ProxyInterceptError
 
-
 log = logging.getLogger(__name__)
 
 
@@ -113,7 +112,7 @@ class SocksHttpConnectAdapter:
         server.close()
         try:
             await server.wait_closed()
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.debug("SocksHttpConnectAdapter close raised", exc_info=True)
 
     async def _handle_client(
@@ -123,12 +122,12 @@ class SocksHttpConnectAdapter:
     ) -> None:
         try:
             await self._serve_one(reader, writer)
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.debug("SocksHttpConnectAdapter client handler raised", exc_info=True)
         finally:
             try:
                 writer.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
     async def _serve_one(
@@ -190,10 +189,10 @@ class SocksHttpConnectAdapter:
 
         try:
             up_reader, up_writer = await asyncio.open_connection(sock=upstream_sock)
-        except Exception:  # noqa: BLE001
+        except Exception:
             try:
                 upstream_sock.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             await self._send_status(writer, 502, "Bad Gateway")
             return
@@ -201,7 +200,7 @@ class SocksHttpConnectAdapter:
         writer.write(b"HTTP/1.1 200 OK\r\n\r\n")
         try:
             await writer.drain()
-        except Exception:  # noqa: BLE001
+        except Exception:
             up_writer.close()
             return
 
@@ -214,7 +213,7 @@ class SocksHttpConnectAdapter:
         finally:
             try:
                 up_writer.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
     async def _read_request_line(
@@ -278,7 +277,7 @@ class SocksHttpConnectAdapter:
         try:
             writer.write(payload)
             await writer.drain()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     async def _splice(
@@ -293,11 +292,11 @@ class SocksHttpConnectAdapter:
                     break
                 dst.write(chunk)
                 await dst.drain()
-        except Exception:  # noqa: BLE001
+        except Exception:
             return
         finally:
             try:
                 if dst.can_write_eof():
                     dst.write_eof()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass

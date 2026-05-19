@@ -24,7 +24,6 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import CallToolResult, TextContent
 
-
 pytestmark = pytest.mark.integration
 
 # Pinned to avoid colliding with test_smoke_integration.py which uses the
@@ -97,7 +96,7 @@ async def _drive_session(
         env=env,
     )
 
-    async with stdio_client(params) as (read_stream, write_stream):
+    async with stdio_client(params) as (read_stream, write_stream):  # noqa: SIM117
         async with ClientSession(read_stream, write_stream) as session:
             await session.initialize()
 
@@ -121,12 +120,16 @@ async def _drive_session(
             title = await session.call_tool("browser_title", {})
             assert not title.isError, f"browser_title failed: {title.content!r}"
             title_payload = _decode_text_payload(title)
-            assert "title" in title_payload, f"browser_title payload missing 'title': {title_payload!r}"
+            assert "title" in title_payload, (
+                f"browser_title payload missing 'title': {title_payload!r}"
+            )
 
             current = await session.call_tool("browser_current_url", {})
             assert not current.isError, f"browser_current_url failed: {current.content!r}"
             current_payload = _decode_text_payload(current)
-            assert "url" in current_payload, f"browser_current_url payload missing 'url': {current_payload!r}"
+            assert "url" in current_payload, (
+                f"browser_current_url payload missing 'url': {current_payload!r}"
+            )
             assert current_payload["url"].startswith("about:"), (
                 f"browser_current_url after about:blank is {current_payload['url']!r}"
             )
@@ -158,10 +161,10 @@ async def _drive_session(
             assert not cfg.isError, f"browser_get_config failed: {cfg.content!r}"
             cfg_payload = _decode_text_payload(cfg)
             assert cfg_payload["socks_port"] == SOCKS_PORT, (
-                f"config socks_port over the wire = {cfg_payload['socks_port']!r}, want {SOCKS_PORT}"
+                f"config socks_port = {cfg_payload['socks_port']!r}, want {SOCKS_PORT}"
             )
             assert cfg_payload["control_port"] == CONTROL_PORT, (
-                f"config control_port over the wire = {cfg_payload['control_port']!r}, want {CONTROL_PORT}"
+                f"config control_port = {cfg_payload['control_port']!r}, want {CONTROL_PORT}"
             )
             assert Path(cfg_payload["output_dir"]) == output_dir.resolve(), (
                 f"config output_dir = {cfg_payload['output_dir']!r}, want {output_dir.resolve()}"

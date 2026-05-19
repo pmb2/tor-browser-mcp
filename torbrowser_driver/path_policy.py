@@ -11,11 +11,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
 from .exceptions import PathNotAllowed
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 
 def _canonical(path: Path) -> Path:
@@ -133,9 +136,11 @@ class PathPolicy:
         raw = Path(filename)
         if raw.is_absolute():
             candidate = _canonical(raw)
-            if self.unrestricted or _is_within(candidate, self.output_dir):
-                resolved = candidate
-            elif any(_is_within(candidate, r) for r in self.allowed_roots):
+            if (
+                self.unrestricted
+                or _is_within(candidate, self.output_dir)
+                or any(_is_within(candidate, r) for r in self.allowed_roots)
+            ):
                 resolved = candidate
             else:
                 raise PathNotAllowed(

@@ -9,10 +9,10 @@ from urllib.request import pathname2url
 
 import pytest
 
-from torbrowser_driver import PathPolicy, PathNotAllowed
+from torbrowser_driver import PathNotAllowed, PathPolicy
 
 
-@pytest.fixture()
+@pytest.fixture
 def workspace(tmp_path: Path) -> dict[str, Path]:
     out = tmp_path / "out"
     root_a = tmp_path / "root_a"

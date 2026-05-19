@@ -18,14 +18,13 @@ from pathlib import Path
 
 from torbrowser_driver import (
     DEFAULT_CAPABILITIES,
-    DriverConfig,
     KNOWN_CAPABILITIES,
     OPTIONAL_CAPABILITIES,
+    DriverConfig,
     PathPolicy,
 )
 
 from .server import ServerOptions, run_server
-
 
 _LOG_LEVELS = ("debug", "info", "warning", "error")
 _PROFILE_MODES = ("ephemeral", "persistent")

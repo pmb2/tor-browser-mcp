@@ -13,7 +13,6 @@ import pytest
 
 from torbrowser_driver import DriverConfig, PathPolicy, TorBrowserDriver
 
-
 pytestmark = pytest.mark.integration
 
 

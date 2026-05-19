@@ -9,7 +9,7 @@ import pytest
 from torbrowser_mcp.cli import build_parser, config_from_args, parse_args
 
 
-@pytest.fixture()
+@pytest.fixture
 def out_dir(tmp_path: Path) -> Path:
     return tmp_path / "out"
 

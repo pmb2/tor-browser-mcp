@@ -33,7 +33,7 @@ def _pick_port() -> int:
         probe.close()
 
 
-@pytest.fixture()
+@pytest.fixture
 def bridge_factory(monkeypatch: pytest.MonkeyPatch):
     # Shorten the poll budget so idle tests don't sleep for 25 seconds.
     monkeypatch.setattr(bridge_module, "_POLL_TIMEOUT_SECONDS", 0.5)
@@ -464,7 +464,7 @@ def test_concurrent_mock_writes_dont_race(bridge_factory) -> None:
     bridge = bridge_factory()
 
     def register(idx: int) -> None:
-        rid = ("%02x" % idx) * 16
+        rid = f"{idx:02x}" * 16
         bridge.register_mock(rid, 200, None, b"x")
 
     threads = [threading.Thread(target=register, args=(i,)) for i in range(10)]
@@ -487,7 +487,7 @@ def test_request_after_disconnect_during_request_raises(bridge_factory) -> None:
     def fire() -> None:
         try:
             bridge.request("hang", {}, timeout=5.0)
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             error_box.append(exc)
 
     t = threading.Thread(target=fire, daemon=True)

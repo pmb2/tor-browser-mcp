@@ -32,11 +32,12 @@ import json
 import logging
 import os
 import tempfile
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .exceptions import ProxyInterceptError
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
 log = logging.getLogger(__name__)
 

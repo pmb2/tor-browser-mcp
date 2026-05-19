@@ -20,12 +20,14 @@ import json
 import logging
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ._helper_extension import HELPER_EXTENSION_DIR, HELPER_EXTENSION_ID
-from ._helper_extension_bridge import HelperBridge
-from .config import DriverConfig
 from .exceptions import BrowserLaunchError
+
+if TYPE_CHECKING:
+    from ._helper_extension_bridge import HelperBridge
+    from .config import DriverConfig
 
 log = logging.getLogger(__name__)
 

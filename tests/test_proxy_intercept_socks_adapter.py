@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 import textwrap
+from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -216,7 +217,7 @@ class _FakeSocksProxy:
     set the endpoint to point at a test echo server.
     """
 
-    instances: list["_FakeSocksProxy"] = []
+    instances: ClassVar[list[_FakeSocksProxy]] = []
     target_endpoint: tuple[str, int] | None = None
     mode: str = "echo"  # "echo" | "fail"
 

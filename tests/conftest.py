@@ -25,7 +25,6 @@ import selenium.webdriver.firefox.webdriver
 from torbrowser_driver import PathPolicy, TorBrowserDriver
 from torbrowser_driver._proxy_intercept_substrate import FlowRecorder
 
-
 # ---------------------------------------------------------------------------
 # Unit-test scaffolding (function scope)
 # ---------------------------------------------------------------------------
@@ -39,7 +38,7 @@ class _FakeConfig(SimpleNamespace):
     """
 
 
-@pytest.fixture()
+@pytest.fixture
 def policy(tmp_path: Path) -> PathPolicy:
     out = tmp_path / "out"
     work = tmp_path / "work"
@@ -47,7 +46,7 @@ def policy(tmp_path: Path) -> PathPolicy:
     return PathPolicy.from_config(output_dir=out, cwd=work)
 
 
-@pytest.fixture()
+@pytest.fixture
 def drv(policy: PathPolicy) -> TorBrowserDriver:
     """Bare-bones driver with a MagicMock webdriver and no controller.
 
@@ -89,7 +88,7 @@ def _build_fake_tbb_layout(root: Path) -> Path:
     return root
 
 
-@pytest.fixture()
+@pytest.fixture
 def fake_tbb_layout(tmp_path: Path) -> Path:
     """Path to a fake Tor Browser bundle laid out under ``tmp_path``."""
 

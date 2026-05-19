@@ -13,7 +13,6 @@ import json
 import threading
 import zipfile
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -79,7 +78,7 @@ class _FakeDriver:
         }
 
 
-@pytest.fixture()
+@pytest.fixture
 def driver_and_session(tmp_path: Path) -> tuple[_FakeDriver, Path]:
     session_dir = tmp_path / "session"
     session_dir.mkdir()

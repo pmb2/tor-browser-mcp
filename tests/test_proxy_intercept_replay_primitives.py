@@ -19,15 +19,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests.conftest import _StubProxyManager
 from torbrowser_driver._proxy_intercept_primitives import (
-    _ProxyInterceptCapabilityMixin,
     _apply_replay_modifications,
+    _ProxyInterceptCapabilityMixin,
 )
 from torbrowser_driver._proxy_intercept_substrate import ProxyManager
 from torbrowser_driver.exceptions import ProxyInterceptError
-
-from tests.conftest import _StubProxyManager
-
 
 _mitm_tflow = pytest.importorskip("mitmproxy.test.tflow")
 
@@ -292,7 +290,7 @@ def test_replay_synthetic_tls_failed_entry_raises_value_error() -> None:
     # Insert a synthetic tls_failed entry (no raw flow).
     mgr.recorder.tls_failed_client(object())
     drv = _Driver(mgr)
-    fake_id = list(mgr.flow_buffer)[0]["id"]
+    fake_id = next(iter(mgr.flow_buffer))["id"]
     with pytest.raises(ValueError) as exc:
         drv.browser_intercept_replay(flow_id=fake_id)
     assert "synthetic" in str(exc.value) or "no raw flow" in str(exc.value)

@@ -6,12 +6,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests.conftest import _FakeConfig
 from torbrowser_driver import PathPolicy, TorBrowserDriver, TorBrowserDriverError
 
-from tests.conftest import _FakeConfig
 
-
-@pytest.fixture()
+@pytest.fixture
 def drv(drv: TorBrowserDriver, policy: PathPolicy) -> TorBrowserDriver:
     drv.config = _FakeConfig(  # type: ignore[assignment]
         path_policy=policy, socks_port=9250, control_port=9251

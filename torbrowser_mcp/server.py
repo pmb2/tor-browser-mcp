@@ -15,8 +15,7 @@ import inspect
 import json
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any
 
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
@@ -32,6 +31,9 @@ from torbrowser_driver import (
 from . import __version__
 from .schema import tool_description, tool_input_schema
 
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+    from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -194,20 +196,20 @@ def build_server(
         handler = _make_driver_handler(driver, tool_name)
         registry.add(tool_name, handler, description, schema)
 
-    for name, fn, description, schema in extra_tools:
-        if schema is None:
-            schema = tool_input_schema(fn)
-        if description is None:
-            description = tool_description(fn)
-        registry.add(name, _make_user_handler(fn), description, schema)
+    for name, fn, extra_description, extra_schema in extra_tools:
+        resolved_schema = extra_schema if extra_schema is not None else tool_input_schema(fn)
+        resolved_description = (
+            extra_description if extra_description is not None else tool_description(fn)
+        )
+        registry.add(name, _make_user_handler(fn), resolved_description, resolved_schema)
 
     server: Server = Server(server_name)
 
-    @server.list_tools()
+    @server.list_tools()  # type: ignore[untyped-decorator]
     async def _list_tools() -> list[Tool]:
         return registry.list_tools()
 
-    @server.call_tool()
+    @server.call_tool()  # type: ignore[untyped-decorator]
     async def _call_tool(
         name: str, arguments: dict[str, Any]
     ) -> list[TextContent] | CallToolResult:

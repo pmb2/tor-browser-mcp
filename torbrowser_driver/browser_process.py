@@ -32,7 +32,7 @@ import platform
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any
 
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
@@ -40,8 +40,10 @@ from selenium.webdriver.firefox.firefox_profile import FirefoxProfile
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.firefox.service import Service
 
-from .config import DriverConfig
 from .exceptions import BrowserLaunchError
+
+if TYPE_CHECKING:
+    from .config import DriverConfig
 
 log = logging.getLogger(__name__)
 
@@ -320,7 +322,7 @@ def launch_browser(
         if isinstance(popen_kw, dict):
             popen_kw["cwd"] = str(config.browser_dir)
         else:
-            service.popen_kw = {"cwd": str(config.browser_dir)}  # type: ignore[attr-defined]
+            service.popen_kw = {"cwd": str(config.browser_dir)}
 
     log.info(
         "starting Tor Browser via geckodriver: binary=%s profile_mode=%s headless=%s",

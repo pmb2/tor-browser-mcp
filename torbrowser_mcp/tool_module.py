@@ -10,9 +10,9 @@ tools to the server.
 from __future__ import annotations
 
 import importlib.util
+from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from torbrowser_driver import (
     DriverConfig,
@@ -21,6 +21,8 @@ from torbrowser_driver import (
     TorBrowserDriver,
 )
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
 AddToolFn = Callable[[str, Callable[..., Any], "str | None", "dict[str, Any] | None"], None]
 

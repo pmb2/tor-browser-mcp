@@ -22,8 +22,8 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 
@@ -34,7 +34,6 @@ from torbrowser_driver import (
     TorBrowserDriver,
 )
 from torbrowser_driver._proxy_intercept_policies import policies_path
-
 
 pytestmark = pytest.mark.integration
 
@@ -91,7 +90,7 @@ def _module_drv(
         yield driver
 
 
-@pytest.fixture()
+@pytest.fixture
 def drv(_module_drv: TorBrowserDriver) -> TorBrowserDriver:
     """Module-scoped driver with per-test recorder reset.
 
@@ -205,10 +204,13 @@ def test_proxy_intercept_flows_surface_check_torproject(drv: TorBrowserDriver) -
             "no check.torproject.org flows captured; Firefox may have used"
             " HTTP/3 and refused the HTTP/2 fallback against the intercept proxy"
         )
-    assert root_flows, (
-        "no 200 flow at the / path captured; flows="
-        f"{[(f.get('request') or {}).get('path', '?') + ' -> ' + str((f.get('response') or {}).get('status_code')) for f in flows]!r}"
-    )
+    flow_summary = [
+        (f.get("request") or {}).get("path", "?")
+        + " -> "
+        + str((f.get("response") or {}).get("status_code"))
+        for f in flows
+    ]
+    assert root_flows, f"no 200 flow at the / path captured; flows={flow_summary!r}"
     entry = root_flows[-1]
 
     resp = entry["response"]

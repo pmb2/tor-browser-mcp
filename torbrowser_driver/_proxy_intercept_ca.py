@@ -21,10 +21,12 @@ from __future__ import annotations
 
 import hashlib
 import ssl
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .exceptions import ProxyInterceptError
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _CA_BASENAME = "mitmproxy"
 _CA_CERT_FILENAME = f"{_CA_BASENAME}-ca-cert.pem"

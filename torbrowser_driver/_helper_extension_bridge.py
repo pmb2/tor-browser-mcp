@@ -25,13 +25,16 @@ import threading
 import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from .exceptions import (
     HelperBridgeDisconnected,
     HelperBridgeTimeout,
     HelperExtensionError,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +71,7 @@ class MockEntry:
 class _PendingRequest:
     """One outgoing request awaiting its matching response."""
 
-    __slots__ = ("event", "result", "error", "dead")
+    __slots__ = ("dead", "error", "event", "result")
 
     def __init__(self) -> None:
         self.event = threading.Event()
@@ -84,10 +87,10 @@ class _Handler(BaseHTTPRequestHandler):
     ``self.server.bridge`` (set by :class:`_Server`).
     """
 
-    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+    def log_message(self, format: str, *args: Any) -> None:
         return
 
-    def _bridge(self) -> "HelperBridge":
+    def _bridge(self) -> HelperBridge:
         return self.server.bridge  # type: ignore[attr-defined]
 
     def _authenticate(self) -> bool:
@@ -164,7 +167,7 @@ class _Handler(BaseHTTPRequestHandler):
             return None
         return decoded
 
-    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler shape
+    def do_POST(self) -> None:
         bridge = self._bridge()
         if bridge.is_closed:
             self._drain_body()
@@ -194,7 +197,7 @@ class _Handler(BaseHTTPRequestHandler):
         bridge._handle_event(message)
         self._send(204)
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         bridge = self._bridge()
         if bridge.is_closed:
             self._send(503)
@@ -218,7 +221,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._send_json(200, item)
 
-    def _serve_host(self, bridge: "HelperBridge") -> None:
+    def _serve_host(self, bridge: HelperBridge) -> None:
         """Serve a minimal HTML host page from the bridge origin.
 
         Mock-mode redirects target ``/mock/<route_id>`` on the bridge.
@@ -248,7 +251,7 @@ class _Handler(BaseHTTPRequestHandler):
         except OSError:
             pass
 
-    def _serve_mock(self, bridge: "HelperBridge", path: str) -> None:
+    def _serve_mock(self, bridge: HelperBridge, path: str) -> None:
         """Serve a registered mock body to page-context fetch.
 
         Intentionally unauthenticated: page JavaScript redirected here
@@ -312,7 +315,7 @@ class _Server(ThreadingHTTPServer):
         self,
         address: tuple[str, int],
         handler: type[BaseHTTPRequestHandler],
-        bridge: "HelperBridge",
+        bridge: HelperBridge,
     ) -> None:
         super().__init__(address, handler)
         self.bridge = bridge
@@ -421,11 +424,11 @@ class HelperBridge:
         if server is not None:
             try:
                 server.shutdown()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             try:
                 server.server_close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
         self._fail_pending("bridge closed")
@@ -589,7 +592,7 @@ class HelperBridge:
         for sink in sinks:
             try:
                 sink(payload)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.exception("helper bridge subscriber raised")
 
     def _watchdog_loop(self) -> None:

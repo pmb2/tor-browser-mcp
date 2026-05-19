@@ -17,17 +17,18 @@ from __future__ import annotations
 import asyncio
 import collections
 import logging
-import pathlib
 import queue
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any
 
 from ._proxy_intercept_socks_adapter import SocksHttpConnectAdapter
 from .exceptions import ProxyInterceptError
 
-
 if TYPE_CHECKING:
+    import pathlib
+    from collections.abc import Sequence
+
     from mitmproxy.http import HTTPFlow
 
 
@@ -57,7 +58,7 @@ class FlowRecorder:
         self._lock = threading.Lock()
         self._next = 0
         self._by_id: dict[str, dict] = {}
-        self._raw_by_id: dict[str, "HTTPFlow"] = {}
+        self._raw_by_id: dict[str, HTTPFlow] = {}
 
     @property
     def buffer(self) -> Sequence[dict]:
@@ -69,7 +70,7 @@ class FlowRecorder:
         with self._lock:
             return self._next
 
-    def flow_by_id(self, flow_id: str) -> "HTTPFlow | None":
+    def flow_by_id(self, flow_id: str) -> HTTPFlow | None:
         """Return the raw ``HTTPFlow`` for ``flow_id`` or ``None``.
 
         Synthetic entries (e.g. ``tls_failed_client``) have no raw flow
@@ -79,14 +80,14 @@ class FlowRecorder:
         with self._lock:
             return self._raw_by_id.get(flow_id)
 
-    def raw_flows_snapshot(self) -> list["HTTPFlow"]:
+    def raw_flows_snapshot(self) -> list[HTTPFlow]:
         """Return raw ``HTTPFlow`` objects in buffer (insertion) order.
 
         Synthetic entries without a raw flow are skipped.
         """
 
         with self._lock:
-            out: list["HTTPFlow"] = []
+            out: list[HTTPFlow] = []
             for entry in self._buffer:
                 fid = entry.get("id")
                 if not isinstance(fid, str):
@@ -111,22 +112,22 @@ class FlowRecorder:
             self._raw_by_id.clear()
             self._next = 0
 
-    def request(self, flow: "HTTPFlow") -> None:
+    def request(self, flow: HTTPFlow) -> None:
         self._record(flow)
 
-    def response(self, flow: "HTTPFlow") -> None:
+    def response(self, flow: HTTPFlow) -> None:
         self._record(flow)
 
-    def error(self, flow: "HTTPFlow") -> None:
+    def error(self, flow: HTTPFlow) -> None:
         self._record(flow)
 
-    def tls_failed_client(self, data: Any) -> None:  # noqa: D401 - mitmproxy hook
+    def tls_failed_client(self, data: Any) -> None:
         try:
             host = getattr(getattr(data, "context", None), "client", None)
             client_repr = repr(host) if host is not None else None
             conn = getattr(data, "conn", None)
             sni = getattr(conn, "sni", None) if conn is not None else None
-        except Exception:  # noqa: BLE001
+        except Exception:
             client_repr = None
             sni = None
         entry = {
@@ -142,7 +143,7 @@ class FlowRecorder:
         }
         self._insert(entry)
 
-    def _record(self, flow: "HTTPFlow") -> None:
+    def _record(self, flow: HTTPFlow) -> None:
         serialised = self._serialise(flow)
         with self._lock:
             self._raw_by_id[serialised["id"]] = flow
@@ -172,7 +173,7 @@ class FlowRecorder:
         if isinstance(flow_id, str):
             self._by_id[flow_id] = entry
 
-    def _serialise(self, flow: "HTTPFlow") -> dict:
+    def _serialise(self, flow: HTTPFlow) -> dict:
         request = flow.request
         req_dict = {
             "method": request.method,
@@ -351,7 +352,7 @@ class ProxyManager:
         remaining = max(0.0, deadline - time.monotonic())
         try:
             future.result(timeout=remaining if remaining > 0 else 0.001)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             future.cancel()
             raise ProxyInterceptError(
                 f"replay dispatch failed: {exc!r}"
@@ -460,12 +461,12 @@ class ProxyManager:
             try:
                 if master is not None:
                     master.shutdown()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.debug("master.shutdown() raised", exc_info=True)
             try:
                 if adapter is not None:
                     await adapter.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.debug("adapter.close() raised", exc_info=True)
 
         try:
@@ -479,7 +480,7 @@ class ProxyManager:
         self._loop = loop
         try:
             loop.run_until_complete(self._main())
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             self._record_error(exc)
         finally:
             try:
@@ -490,11 +491,11 @@ class ProxyManager:
                     loop.run_until_complete(
                         asyncio.gather(*pending, return_exceptions=True)
                     )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             try:
                 loop.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._loop = None
             self._exit_event.set()
@@ -517,7 +518,7 @@ class ProxyManager:
             master = self._build_master(adapter.actual_port)
             master.addons.add(self._recorder)
             self._master = master
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             self._start_error = exc
             self._record_error(exc)
             self._start_event.set()
@@ -525,7 +526,7 @@ class ProxyManager:
             if adapter is not None:
                 try:
                     await adapter.close()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
                 self._adapter = None
             return
@@ -534,7 +535,7 @@ class ProxyManager:
 
         try:
             await master.run()
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             self._record_error(exc)
         finally:
             adapter = self._adapter
@@ -542,7 +543,7 @@ class ProxyManager:
             if adapter is not None:
                 try:
                     await adapter.close()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
 
     def _build_master(self, adapter_port: int) -> Any:
@@ -558,7 +559,7 @@ class ProxyManager:
         }
         if self._ca_dir is not None:
             update_kwargs["confdir"] = str(self._ca_dir)
-        if "connection_strategy" in opts.keys():
+        if "connection_strategy" in opts:
             update_kwargs["connection_strategy"] = "lazy"
         opts.update(**update_kwargs)
         return DumpMaster(opts, with_termlog=False, with_dumper=False)

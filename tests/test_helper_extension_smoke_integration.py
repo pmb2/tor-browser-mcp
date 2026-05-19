@@ -16,8 +16,8 @@ from __future__ import annotations
 import base64
 import socket
 import time
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 
@@ -27,7 +27,6 @@ from torbrowser_driver import (
     PathPolicy,
     TorBrowserDriver,
 )
-
 
 pytestmark = pytest.mark.integration
 
@@ -68,7 +67,7 @@ def _port_is_listening(host: str, port: int) -> bool:
     try:
         sock.connect((host, port))
         return True
-    except (OSError, socket.timeout):
+    except (TimeoutError, OSError):
         return False
     finally:
         sock.close()

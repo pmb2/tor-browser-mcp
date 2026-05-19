@@ -11,7 +11,7 @@ from torbrowser_driver import DriverConfig, DriverConfigError, PathPolicy
 from torbrowser_mcp.tool_module import ToolContext, load_tool_module
 
 
-@pytest.fixture()
+@pytest.fixture
 def context(
     tmp_path: Path, fake_tbb_layout: Path
 ) -> tuple[ToolContext, list[tuple[str, object]]]:

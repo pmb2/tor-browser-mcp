@@ -6,8 +6,6 @@ import asyncio
 import json
 from unittest.mock import MagicMock
 
-import pytest
-
 from mcp.types import CallToolResult, TextContent
 
 from torbrowser_driver import TorBrowserDriver, registered_methods
@@ -20,14 +18,14 @@ def _run(coro):
 
 def test_registered_tool_names_match_driver_core() -> None:
     driver = MagicMock(spec=TorBrowserDriver)
-    server, registry = build_server(driver, {"core"})
+    _server, registry = build_server(driver, {"core"})
     expected = set(registered_methods(TorBrowserDriver, {"core"}).keys())
     assert set(registry.names()) == expected
 
 
 def test_list_tools_returns_tool_objects() -> None:
     driver = MagicMock(spec=TorBrowserDriver)
-    server, registry = build_server(driver, {"core"})
+    _server, registry = build_server(driver, {"core"})
     tools = registry.list_tools()
     assert tools, "expected at least one core tool"
     assert any(t.name == "browser_navigate" for t in tools)
@@ -39,7 +37,7 @@ def test_list_tools_returns_tool_objects() -> None:
 def test_call_tool_dispatches_to_driver() -> None:
     driver = MagicMock(spec=TorBrowserDriver)
     driver.browser_navigate.return_value = {"url": "https://example.com", "title": "x"}
-    server, registry = build_server(driver, {"core"})
+    _server, registry = build_server(driver, {"core"})
 
     entry = registry.get("browser_navigate")
     assert entry is not None
@@ -102,7 +100,7 @@ def test_extra_tools_registered() -> None:
     def hello() -> dict:
         return {"ok": True}
 
-    server, registry = build_server(
+    _server, registry = build_server(
         driver,
         {"core"},
         extra_tools=[("hello", hello, "say hello", None)],

@@ -10,8 +10,7 @@ is exercised against the version of mitmproxy actually installed.
 from __future__ import annotations
 
 import asyncio
-import threading
-import time
+from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -21,7 +20,6 @@ from torbrowser_driver._proxy_intercept_substrate import (
     ProxyManager,
 )
 from torbrowser_driver.exceptions import ProxyInterceptError
-
 
 _mitm = pytest.importorskip("mitmproxy.test.tflow")
 _mitm_http = pytest.importorskip("mitmproxy.http")
@@ -43,7 +41,7 @@ class _FakeMaster:
     is called, and a synchronous ``shutdown()`` that unblocks the run.
     """
 
-    instances: list["_FakeMaster"] = []
+    instances: ClassVar[list[_FakeMaster]] = []
 
     def __init__(self, opts, with_termlog=True, with_dumper=True) -> None:
         self.options = opts
@@ -189,9 +187,11 @@ def test_start_propagates_master_build_failure() -> None:
         socks_host="127.0.0.1",
         socks_port=1,
     )
-    with patch.object(ProxyManager, "_build_master", lambda self, p: _Boom()):
-        with pytest.raises(ProxyInterceptError):
-            mgr.start(timeout=5.0)
+    with (
+        patch.object(ProxyManager, "_build_master", lambda self, p: _Boom()),
+        pytest.raises(ProxyInterceptError),
+    ):
+        mgr.start(timeout=5.0)
     # last_error surfaces the underlying RuntimeError.
     last = mgr.last_error()
     assert isinstance(last, RuntimeError)

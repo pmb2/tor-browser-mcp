@@ -6,14 +6,13 @@ import pytest
 
 from torbrowser_driver import (
     DEFAULT_CAPABILITIES,
-    DriverConfigError,
     KNOWN_CAPABILITIES,
     OPTIONAL_CAPABILITIES,
+    DriverConfigError,
     TorBrowserDriver,
     capability,
     registered_methods,
 )
-
 
 EXPECTED_CORE_METHODS: frozenset[str] = frozenset(
     {
