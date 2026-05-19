@@ -93,3 +93,17 @@ def test_rejects_missing_geckodriver(
 def test_extra_prefs_default_is_empty(fake_tbb: Path, policy: PathPolicy) -> None:
     config = DriverConfig(tbb_root=fake_tbb, path_policy=policy)
     assert dict(config.extra_prefs) == {}
+
+
+def test_allow_chrome_system_access_tracks_unsafe_cap(
+    fake_tbb: Path, policy: PathPolicy
+) -> None:
+    defaults = DriverConfig(tbb_root=fake_tbb, path_policy=policy)
+    assert defaults.allow_chrome_system_access is False
+
+    with_unsafe = DriverConfig(
+        tbb_root=fake_tbb,
+        path_policy=policy,
+        enabled_caps=defaults.enabled_caps | {"unsafe"},
+    )
+    assert with_unsafe.allow_chrome_system_access is True

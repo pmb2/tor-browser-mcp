@@ -165,3 +165,16 @@ class DriverConfig:
     @property
     def geoip6_file(self) -> Path:
         return self.tor_data_root / "geoip6"
+
+    @property
+    def allow_chrome_system_access(self) -> bool:
+        """Whether Firefox is launched with ``-remote-allow-system-access``.
+
+        Marionette in Firefox 128+ refuses to switch the WebDriver context
+        to ``chrome`` unless the browser was started with this flag. The
+        chrome scope is only reachable through tools tagged with the
+        ``unsafe`` capability, so the flag is enabled exactly when that
+        capability is.
+        """
+
+        return "unsafe" in self.enabled_caps

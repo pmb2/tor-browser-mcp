@@ -197,6 +197,8 @@ def launch_browser(
     options.binary_location = str(config.firefox_path)
     if config.headless:
         options.add_argument("-headless")
+    if config.allow_chrome_system_access:
+        options.add_argument("-remote-allow-system-access")
     options.profile = _build_profile(config, session_dir)
 
     env = _build_env(config)
