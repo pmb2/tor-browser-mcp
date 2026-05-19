@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import shutil
 import tempfile
@@ -106,9 +107,7 @@ class TorBrowserDriver(
         if config.tor_data_dir is None:
             tor_data = self._session_dir / "tor-data"
             tor_data.mkdir(parents=True, exist_ok=True)
-            config = type(config)(  # frozen dataclass shallow copy with override
-                **{**config.__dict__, "tor_data_dir": tor_data}
-            )
+            config = dataclasses.replace(config, tor_data_dir=tor_data)
             self._owns_tor_data_dir = True
             self.config = config
 

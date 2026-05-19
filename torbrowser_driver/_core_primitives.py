@@ -710,14 +710,11 @@ class _CoreCapabilityMixin:
 
         drv = self._require_driver()
         drv.set_script_timeout(float(timeout))
-        try:
-            if selector is not None:
-                element = self._find(selector)
-                result = drv.execute_async_script(script, element)
-            else:
-                result = drv.execute_async_script(script)
-        finally:
-            pass
+        if selector is not None:
+            element = self._find(selector)
+            result = drv.execute_async_script(script, element)
+        else:
+            result = drv.execute_async_script(script)
 
         if filename is not None:
             path = self.config.path_policy.resolve_output(filename)

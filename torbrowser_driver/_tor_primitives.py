@@ -297,13 +297,11 @@ class _TorCapabilityMixin:
         return {"circuits": circuits}
 
     @capability("tor")
-    def tor_stream_status(self, verbose: bool = False) -> dict[str, Any]:
+    def tor_stream_status(self) -> dict[str, Any]:
         """Parse ``GETINFO stream-status`` into structured stream entries.
 
         Each stream carries ``id``, ``status``, ``circuit_id``, and
-        ``target``. ``verbose`` is accepted for symmetry with
-        :meth:`tor_circuit_status`; stem does not expose additional fields
-        on the basic stream-status line.
+        ``target``.
         """
 
         ctrl = self._require_controller()
@@ -313,7 +311,6 @@ class _TorCapabilityMixin:
             for line in raw.splitlines()
             if line.strip()
         ]
-        _ = verbose
         return {"streams": streams}
 
     @capability("tor")
