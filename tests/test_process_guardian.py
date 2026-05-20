@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 import time
@@ -28,12 +27,19 @@ def test_adopt_negative_or_zero_pid_is_rejected() -> None:
 
 
 def test_adopt_is_idempotent() -> None:
+    # The singleton's atexit hook SIGTERMs every adopted PID, so adopting
+    # os.getpid() would kill the test runner at interpreter shutdown.
     guardian = ProcessGuardian.instance()
-    pid = os.getpid()
-    first = guardian.adopt(pid)
-    second = guardian.adopt(pid)
-    assert first == second
-    assert pid in guardian.adopted_pids()
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        first = guardian.adopt(proc.pid)
+        second = guardian.adopt(proc.pid)
+        assert first is True
+        assert second is True
+        assert proc.pid in guardian.adopted_pids()
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
 
 
 @pytest.mark.skipif(not IS_WINDOWS, reason="Job Object semantics only meaningful on Windows")
