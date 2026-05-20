@@ -288,8 +288,11 @@ def _resolve_geckodriver(config: DriverConfig) -> str:
 
     1. ``config.geckodriver_path`` if the caller supplied one. This
        short-circuits every other step and never touches the network.
-    2. A ``geckodriver`` binary on ``PATH``.
-    3. The on-first-run resolver in :mod:`._geckodriver_resolver`, which
+    2. ``<tbb_root>/Browser/geckodriver`` if it exists and is executable.
+       Older Tor Browser releases shipped geckodriver inside the tarball;
+       users who placed one there manually are also covered.
+    3. A ``geckodriver`` binary on ``PATH``.
+    4. The on-first-run resolver in :mod:`._geckodriver_resolver`, which
        downloads the version matching the bundle's Firefox ESR into
        ``~/.cache/tor-browser-mcp/geckodriver/<version>/``. Subsequent
        sessions reuse the cached binary.
@@ -297,6 +300,10 @@ def _resolve_geckodriver(config: DriverConfig) -> str:
 
     if config.geckodriver_path is not None:
         return str(config.geckodriver_path)
+    bundled = config.tbb_root / "Browser" / "geckodriver"
+    if bundled.is_file() and os.access(bundled, os.X_OK):
+        log.info("geckodriver: using bundled binary at %s", bundled)
+        return str(bundled)
     located = shutil.which("geckodriver")
     if located:
         return located

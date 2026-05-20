@@ -339,3 +339,128 @@ def test_resolve_geckodriver_translates_resolver_failure(
         "torbrowser_driver.browser_process.shutil.which", return_value=None
     ), pytest.raises(BrowserLaunchError, match="synthetic failure"):
         _resolve_geckodriver(config)
+
+
+# ---------------------------------------------------------------------------
+# Bundled geckodriver short-circuit
+# ---------------------------------------------------------------------------
+
+
+def _place_bundled_geckodriver(tbb_root: Path, *, executable: bool) -> Path:
+    """Write a fake geckodriver into <tbb_root>/Browser/ and set its mode."""
+    binary = tbb_root / "Browser" / "geckodriver"
+    binary.write_bytes(b"fake-bundled-geckodriver")
+    if executable:
+        binary.chmod(binary.stat().st_mode | 0o111)
+    else:
+        binary.chmod(0o644)
+    return binary
+
+
+@pytest.mark.skipif(os.name == "nt", reason="executable-bit check not meaningful on Windows")
+def test_bundled_geckodriver_executable_is_used(
+    fake_tbb_layout: Path, policy: Any
+) -> None:
+    from torbrowser_driver import DriverConfig
+    from torbrowser_driver.browser_process import _resolve_geckodriver
+
+    bundled = _place_bundled_geckodriver(fake_tbb_layout, executable=True)
+    config = DriverConfig(tbb_root=fake_tbb_layout, path_policy=policy)
+
+    with patch.object(resolver_mod, "resolve_geckodriver") as mocked, patch(
+        "torbrowser_driver.browser_process.shutil.which", return_value=None
+    ):
+        result = _resolve_geckodriver(config)
+
+    assert result == str(bundled)
+    mocked.assert_not_called()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="executable-bit check not meaningful on Windows")
+def test_bundled_geckodriver_not_executable_falls_through(
+    fake_tbb_layout: Path, policy: Any, tmp_path: Path
+) -> None:
+    from torbrowser_driver import DriverConfig
+    from torbrowser_driver.browser_process import _resolve_geckodriver
+
+    _place_bundled_geckodriver(fake_tbb_layout, executable=False)
+    config = DriverConfig(tbb_root=fake_tbb_layout, path_policy=policy)
+    resolver_result = tmp_path / "resolver-geckodriver"
+    resolver_result.write_bytes(b"")
+
+    with patch(
+        "torbrowser_driver._geckodriver_resolver.resolve_geckodriver",
+        return_value=resolver_result,
+    ) as mocked, patch(
+        "torbrowser_driver.browser_process.shutil.which", return_value=None
+    ):
+        result = _resolve_geckodriver(config)
+
+    assert result == str(resolver_result)
+    mocked.assert_called_once()
+
+
+def test_bundled_geckodriver_missing_falls_through(
+    fake_tbb_layout: Path, policy: Any, tmp_path: Path
+) -> None:
+    from torbrowser_driver import DriverConfig
+    from torbrowser_driver.browser_process import _resolve_geckodriver
+
+    # No geckodriver placed in the bundle — ensure the resolver is still reached.
+    config = DriverConfig(tbb_root=fake_tbb_layout, path_policy=policy)
+    resolver_result = tmp_path / "resolver-geckodriver"
+    resolver_result.write_bytes(b"")
+
+    with patch(
+        "torbrowser_driver._geckodriver_resolver.resolve_geckodriver",
+        return_value=resolver_result,
+    ) as mocked, patch(
+        "torbrowser_driver.browser_process.shutil.which", return_value=None
+    ):
+        result = _resolve_geckodriver(config)
+
+    assert result == str(resolver_result)
+    mocked.assert_called_once()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="executable-bit check not meaningful on Windows")
+def test_explicit_override_beats_bundled_geckodriver(
+    fake_tbb_layout: Path, policy: Any, tmp_path: Path
+) -> None:
+    from torbrowser_driver import DriverConfig
+    from torbrowser_driver.browser_process import _resolve_geckodriver
+
+    _place_bundled_geckodriver(fake_tbb_layout, executable=True)
+    explicit = tmp_path / "explicit-geckodriver"
+    explicit.write_bytes(b"")
+    config = DriverConfig(
+        tbb_root=fake_tbb_layout,
+        path_policy=policy,
+        geckodriver_path=explicit,
+    )
+
+    with patch.object(resolver_mod, "resolve_geckodriver") as mocked, patch(
+        "torbrowser_driver.browser_process.shutil.which", return_value=None
+    ):
+        result = _resolve_geckodriver(config)
+
+    assert result == str(explicit)
+    mocked.assert_not_called()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="executable-bit check not meaningful on Windows")
+def test_bundled_geckodriver_does_not_invoke_resolver(
+    fake_tbb_layout: Path, policy: Any
+) -> None:
+    from torbrowser_driver import DriverConfig
+    from torbrowser_driver.browser_process import _resolve_geckodriver
+
+    _place_bundled_geckodriver(fake_tbb_layout, executable=True)
+    config = DriverConfig(tbb_root=fake_tbb_layout, path_policy=policy)
+
+    with patch.object(resolver_mod, "resolve_geckodriver") as mocked, patch(
+        "torbrowser_driver.browser_process.shutil.which", return_value=None
+    ):
+        _resolve_geckodriver(config)
+
+    mocked.assert_not_called()

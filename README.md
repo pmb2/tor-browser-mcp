@@ -23,7 +23,7 @@ Drives the stock Tor Browser via geckodriver + Marionette, preserves the anonymi
 
 Python 3.10+ and an extracted Tor Browser bundle. The `proxy-intercept` extra additionally requires Python 3.12+ because of mitmproxy 11's runtime floor.
 
-A compatible `geckodriver` binary is also required. The server will, in order: use `--geckodriver-path` if you supplied one, then a `geckodriver` on `PATH`, then download a version matching the bundle's Firefox ESR into `~/.cache/tor-browser-mcp/geckodriver/<version>/` on first run. Subsequent sessions reuse the cached binary. To avoid the on-first-run download (air-gapped or hostile network), pre-populate the cache directory from an out-of-band channel or pass `--geckodriver-path` to point at a binary you already have.
+A compatible `geckodriver` binary is also required. The server resolves which binary to use in this order: `--geckodriver-path` if you supplied one; then `<tbb_root>/Browser/geckodriver` if it exists and is executable (covers older TB releases that shipped it in the tarball); then a `geckodriver` on `PATH`; then a version matching the bundle's Firefox ESR downloaded into `~/.cache/tor-browser-mcp/geckodriver/<version>/` on first run. Subsequent sessions reuse the cached binary. To avoid the on-first-run download (air-gapped or hostile network), pre-populate the cache directory from an out-of-band channel or pass `--geckodriver-path` to point at a binary you already have.
 
 ## Install
 

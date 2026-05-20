@@ -5,8 +5,9 @@
 A compatible `geckodriver` binary is required to drive Tor Browser. The driver resolves which binary to use at session start, in this fixed order:
 
 1. **`config.geckodriver_path` (or the `--geckodriver-path` CLI flag).** If you supplied a path, it is used verbatim and no other discovery happens. This is the air-gapped / offline path: nothing the resolver does can reach the network once you have set this.
-2. **`shutil.which("geckodriver")`.** If a `geckodriver` binary is already on `PATH`, the driver uses it. This is the right answer when you maintain a system-wide install or have the bundle's geckodriver on `PATH`.
-3. **On-first-run resolver.** If neither of the above produced a binary, the driver reads the bundle's `Browser/application.ini` to recover the Firefox ESR version Tor Browser is riding, maps that to a known-compatible `geckodriver` release via a static table, and downloads the release archive from <https://github.com/mozilla/geckodriver/releases> into a per-user cache. The cached binary is reused by every subsequent session.
+2. **`<tbb_root>/Browser/geckodriver` if it exists and is executable.** Older Tor Browser releases shipped geckodriver inside the tarball. Users who placed one there manually are also covered. The driver logs the path at `INFO` when this step wins. A file that exists but is not executable is skipped and discovery continues.
+3. **`shutil.which("geckodriver")`.** If a `geckodriver` binary is already on `PATH`, the driver uses it. This is the right answer when you maintain a system-wide install or have the bundle's geckodriver on `PATH`.
+4. **On-first-run resolver.** If none of the above produced a binary, the driver reads the bundle's `Browser/application.ini` to recover the Firefox ESR version Tor Browser is riding, maps that to a known-compatible `geckodriver` release via a static table, and downloads the release archive from <https://github.com/mozilla/geckodriver/releases> into a per-user cache. The cached binary is reused by every subsequent session.
 
 The driver logs the URL it is about to fetch at `INFO` before issuing any HTTP request. Downloads only happen on a cache miss; a cache hit is silent and never reaches out.
 
