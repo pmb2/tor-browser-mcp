@@ -15,9 +15,7 @@ from __future__ import annotations
 import inspect
 import types
 import typing
-from typing import Any, Union, get_args, get_origin
-
-from typing_extensions import NotRequired, Required
+from typing import Any, NotRequired, Required, Union, get_args, get_origin
 
 if typing.TYPE_CHECKING:
     from collections.abc import Callable

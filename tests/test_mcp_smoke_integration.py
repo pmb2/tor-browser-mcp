@@ -203,7 +203,7 @@ def test_mcp_stdio_wire_path(
                 _drive_session(tbb_root, geckodriver_path, output_dir),
                 timeout=OVERALL_TIMEOUT_S,
             )
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise AssertionError(
                 f"MCP stdio wire-path test exceeded {OVERALL_TIMEOUT_S:.0f}s; "
                 "subprocess or client likely hung during initialize/list_tools/call_tool"

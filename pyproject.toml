@@ -9,12 +9,11 @@ description = "MCP server for stock Tor Browser automation via geckodriver and M
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "Botond Ormandi" }]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 keywords = ["tor", "tor-browser", "mcp", "browser-automation", "geckodriver", "marionette"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Internet :: WWW/HTTP :: Browsers",
@@ -69,7 +68,7 @@ markers = [
 ]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
@@ -115,9 +114,9 @@ ignore_missing_imports = true
 # weak; full strict mode produces dozens of false positives, so the broad
 # package runs in a partial-strict profile that catches the audit findings
 # most likely to recur: unused type-ignore comments and redundant casts.
-# python_version is set to 3.12 (above the project's 3.10 minimum) so mypy
+# python_version is set to 3.12 (above the project's 3.11 minimum) so mypy
 # parses third-party packages that use PEP 695 type statements; the language
-# features used in this codebase target 3.10 regardless.
+# features used in this codebase target 3.11 regardless.
 follow_imports = "silent"
 files = ["torbrowser_mcp", "torbrowser_driver"]
 warn_unused_ignores = true

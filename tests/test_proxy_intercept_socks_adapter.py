@@ -49,7 +49,7 @@ async def _http_request(host: str, port: int, payload: bytes) -> bytes:
     await writer.drain()
     try:
         data = await asyncio.wait_for(reader.read(4096), timeout=2.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         data = b""
     writer.close()
     try:
