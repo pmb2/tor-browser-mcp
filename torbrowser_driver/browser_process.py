@@ -250,6 +250,15 @@ def _build_env(config: DriverConfig) -> dict[str, str]:
             env["FONTCONFIG_PATH"] = str(fontconfig_dir)
         if fontconfig_file.is_file():
             env["FONTCONFIG_FILE"] = str(fontconfig_file)
+        # Preserve XAUTHORITY before overriding HOME so Firefox can still
+        # authenticate against the X server.  When the caller did not set
+        # XAUTHORITY explicitly, derive it from the *real* home directory
+        # (the value of HOME before we replace it) so the override does not
+        # lose the X cookie path.
+        if "XAUTHORITY" not in env:
+            real_xauth = Path(env["HOME"]) / ".Xauthority"
+            if real_xauth.is_file():
+                env["XAUTHORITY"] = str(real_xauth)
         env["HOME"] = browser_dir
 
     # Prepending Browser/ and the tor subdir to PATH is harmless on both

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import os
+import platform
 import re
 import socket
 import subprocess
 import threading
-from contextlib import closing, suppress
+from contextlib import closing, contextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -27,6 +29,36 @@ log = logging.getLogger(__name__)
 
 
 _BOOTSTRAP_LINE_TOKENS = ("Bootstrapped", "Problem", "[warn]", "[err]")
+
+
+@contextmanager
+def _tor_lib_env(tor_dir: Path):
+    """Temporarily prepend *tor_dir* to ``LD_LIBRARY_PATH`` on Linux.
+
+    The bundled tor binary links against libevent and OpenSSL shipped inside
+    the bundle.  Those libraries are not on the system library path, so the
+    dynamic linker fails with exit 127 unless the bundle directory is
+    prepended.  stem launches tor via :mod:`subprocess` without an explicit
+    ``env=`` argument, so it inherits whatever ``os.environ`` holds at call
+    time.  This context manager sets the variable before the stem call and
+    restores the original value (or removes the variable if it was absent)
+    after the call returns or raises.
+    """
+    if platform.system() != "Linux":
+        yield
+        return
+
+    key = "LD_LIBRARY_PATH"
+    old = os.environ.get(key)
+    prepend = str(tor_dir)
+    os.environ[key] = prepend + os.pathsep + old if old else prepend
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = old
 
 
 def _default_init_handler(line: str) -> None:
@@ -110,14 +142,15 @@ def launch_tor(
             bootstrap_done.set()
         handler(line)
 
-    process = stem.process.launch_tor_with_config(
-        tor_cmd=str(config.tor_path),
-        config=tor_config,
-        init_msg_handler=_watch,
-        timeout=None,
-        take_ownership=False,
-        close_output=False,
-    )
+    with _tor_lib_env(config.tor_path.parent):
+        process = stem.process.launch_tor_with_config(
+            tor_cmd=str(config.tor_path),
+            config=tor_config,
+            init_msg_handler=_watch,
+            timeout=None,
+            take_ownership=False,
+            close_output=False,
+        )
 
     ProcessGuardian.instance().adopt(process.pid)
 
