@@ -21,7 +21,9 @@ Drives the stock Tor Browser via geckodriver + Marionette, preserves the anonymi
 
 ## Requirements
 
-Python 3.10+, an extracted Tor Browser bundle, and a compatible `geckodriver`. The `proxy-intercept` extra additionally requires Python 3.12+ because of mitmproxy 11's runtime floor.
+Python 3.10+ and an extracted Tor Browser bundle. The `proxy-intercept` extra additionally requires Python 3.12+ because of mitmproxy 11's runtime floor.
+
+A compatible `geckodriver` binary is also required. The server will, in order: use `--geckodriver-path` if you supplied one, then a `geckodriver` on `PATH`, then download a version matching the bundle's Firefox ESR into `~/.cache/tor-browser-mcp/geckodriver/<version>/` on first run. Subsequent sessions reuse the cached binary. To avoid the on-first-run download (air-gapped or hostile network), pre-populate the cache directory from an out-of-band channel or pass `--geckodriver-path` to point at a binary you already have.
 
 ## Install
 
@@ -32,7 +34,7 @@ pip install torbrowser-mcp[proxy-intercept]
 
 > **Status:** pre-PyPI. Until the package lands on PyPI, install from a checkout: `pip install -e .` (or `pip install -e .[proxy-intercept]`).
 
-Tor Browser ships a compatible `geckodriver` on Linux x86_64 (under `Browser/`); on Windows, download the version matching Tor Browser's Firefox ESR from <https://github.com/mozilla/geckodriver/releases> (TB 15.0.x ships Firefox 140.10.2esr, which works with geckodriver v0.36.0).
+If you prefer to manage the `geckodriver` yourself, download the version matching Tor Browser's Firefox ESR from <https://github.com/mozilla/geckodriver/releases> (TB 15.0.x ships Firefox 140 ESR, which works with geckodriver v0.36.0) and pass its path via `--geckodriver-path` or place it on `PATH`. See `docs/development.md` for the full version map and cache layout.
 
 ## Getting started
 

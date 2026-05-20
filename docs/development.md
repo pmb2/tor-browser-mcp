@@ -2,6 +2,57 @@
 
 ## Geckodriver
 
+A compatible `geckodriver` binary is required to drive Tor Browser. The driver resolves which binary to use at session start, in this fixed order:
+
+1. **`config.geckodriver_path` (or the `--geckodriver-path` CLI flag).** If you supplied a path, it is used verbatim and no other discovery happens. This is the air-gapped / offline path: nothing the resolver does can reach the network once you have set this.
+2. **`shutil.which("geckodriver")`.** If a `geckodriver` binary is already on `PATH`, the driver uses it. This is the right answer when you maintain a system-wide install or have the bundle's geckodriver on `PATH`.
+3. **On-first-run resolver.** If neither of the above produced a binary, the driver reads the bundle's `Browser/application.ini` to recover the Firefox ESR version Tor Browser is riding, maps that to a known-compatible `geckodriver` release via a static table, and downloads the release archive from <https://github.com/mozilla/geckodriver/releases> into a per-user cache. The cached binary is reused by every subsequent session.
+
+The driver logs the URL it is about to fetch at `INFO` before issuing any HTTP request. Downloads only happen on a cache miss; a cache hit is silent and never reaches out.
+
+### Version map
+
+The static table maps Firefox ESR major to the matching `geckodriver` release. The newest matching entry wins; an unknown future Firefox major falls through to the most recent known pair, which is the closest compatible build at the time the table was last refreshed.
+
+| Firefox ESR major | geckodriver |
+| --- | --- |
+| 140 (current Tor Browser 15.0.x) | 0.36.0 |
+| 128 | 0.35.0 |
+| 115 | 0.34.0 |
+| 102 | 0.32.0 |
+| 91 | 0.31.0 |
+| 78 | 0.30.0 |
+
+When Tor Browser moves to a newer Firefox ESR, add a new top entry to `_FIREFOX_ESR_TO_GECKODRIVER` in `torbrowser_driver/_geckodriver_resolver.py`. The table is ordered newest-first.
+
+### Cache layout
+
+The default cache directory is `~/.cache/tor-browser-mcp/geckodriver/`. Inside it, the resolver creates a version-keyed subdirectory:
+
+```
+~/.cache/tor-browser-mcp/geckodriver/
+    0.36.0/
+        geckodriver           (POSIX)
+        geckodriver.exe       (Windows)
+    0.35.0/
+        geckodriver
+```
+
+Multiple Firefox ESR majors can coexist in the same cache; nothing is pruned automatically. To force a fresh download, delete the version subdirectory. To run completely offline, populate the directory from an out-of-band channel before the first session — the binary at the expected path is the only thing the resolver checks.
+
+### Offline and air-gapped use
+
+Two paths keep the resolver from touching the network:
+
+- **Set `--geckodriver-path` (or `DriverConfig.geckodriver_path`).** The resolver is bypassed entirely; the supplied binary is used.
+- **Pre-populate the cache directory.** Copy a compatible `geckodriver` binary into `~/.cache/tor-browser-mcp/geckodriver/<version>/geckodriver(.exe)` before the first session. The resolver finds the cache hit and never issues a request.
+
+If neither path is set up and the network is unavailable on first run, the resolver raises a `BrowserLaunchError` describing the failure; no partial state is left in the cache directory.
+
+### Deferred work
+
+The current resolver does not perform checksum or signature verification beyond a size-sanity check on the downloaded archive (it must be between 256 KiB and 64 MiB). A hostile network can in principle substitute a different binary; users who need cryptographic guarantees should rely on `--geckodriver-path` and verify the binary themselves out of band. Checksum and SHA256SUMS verification is a candidate for a follow-up.
+
 ## Integration tests
 
 The five live-browser integration smokes are opt-in. They are collected by the `integration` marker (`pyproject.toml` `[tool.pytest.ini_options]`) and skipped unconditionally unless `TBB_ROOT` is set in the environment. No test runs against a real Tor Browser in CI unless a runner image with a Tor Browser bundle is available — the current CI matrix does not provide one, so the unit suite is the mandatory gate and the live smokes remain a local developer responsibility.

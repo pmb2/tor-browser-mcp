@@ -269,14 +269,36 @@ def _build_env(config: DriverConfig) -> dict[str, str]:
 
 
 def _resolve_geckodriver(config: DriverConfig) -> str:
+    """Resolve the geckodriver binary path for this session.
+
+    Resolution order:
+
+    1. ``config.geckodriver_path`` if the caller supplied one. This
+       short-circuits every other step and never touches the network.
+    2. A ``geckodriver`` binary on ``PATH``.
+    3. The on-first-run resolver in :mod:`._geckodriver_resolver`, which
+       downloads the version matching the bundle's Firefox ESR into
+       ``~/.cache/tor-browser-mcp/geckodriver/<version>/``. Subsequent
+       sessions reuse the cached binary.
+    """
+
     if config.geckodriver_path is not None:
         return str(config.geckodriver_path)
     located = shutil.which("geckodriver")
-    if not located:
-        raise BrowserLaunchError(
-            "geckodriver_path is None and no 'geckodriver' binary was found on PATH"
+    if located:
+        return located
+    try:
+        from ._geckodriver_resolver import (
+            GeckodriverResolveError,
+            resolve_geckodriver,
         )
-    return located
+
+        return str(resolve_geckodriver(tbb_root=config.tbb_root))
+    except GeckodriverResolveError as exc:
+        raise BrowserLaunchError(
+            f"geckodriver_path is None, no 'geckodriver' binary was found on PATH, "
+            f"and the on-first-run resolver failed: {exc}"
+        ) from exc
 
 
 def launch_browser(
