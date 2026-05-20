@@ -110,6 +110,19 @@ def _proxy_intercept_prefs_overlay(config: DriverConfig) -> dict[str, Any]:
         "network.proxy.ssl_port": config.intercept_port,
         "network.proxy.share_proxy_settings": True,
         "network.proxy.no_proxies_on": "",
+        # HTTPS-Only mode in Tor Browser / Firefox 128+ upgrades any
+        # http:// navigation to https:// before the request reaches the
+        # proxy substrate.  Mock-mode routes registered against http://
+        # patterns would then see the upgraded https:// URL in
+        # window.location rather than the original URL the caller
+        # supplied, breaking the Playwright-style "fulfill on the
+        # original URL" guarantee.  With the intercept proxy in place
+        # TLS is already handled at the mitmproxy layer; disabling
+        # HTTPS-Only here avoids the double-upgrade.
+        "dom.security.https_only_mode": False,
+        # The PBM variant applies specifically to private-browsing windows
+        # (which TB opens by default); both prefs must be cleared together.
+        "dom.security.https_only_mode_pbm": False,
     }
 
 

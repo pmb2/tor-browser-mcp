@@ -449,6 +449,21 @@ class MockRouter:
             headers["Content-Type"] = entry.content_type
         for name, value in entry.headers.items():
             headers[name] = value
+        # Cross-origin fetch() calls require Access-Control-Allow-Origin in the
+        # response or the browser rejects it as a CORS failure (surfaced as a
+        # TypeError NetworkError in the page).  Mock-mode responses are
+        # synthesized test fixtures, not real server responses, so a permissive
+        # ACAO header is always correct here.  Only inject when the caller has
+        # not already supplied one.
+        #
+        # Access-Control-Expose-Headers: * exposes non-safelisted headers (e.g.
+        # custom X- headers) to the page's fetch Response.headers accessor.
+        # Without it, cross-origin reads of caller-supplied response headers
+        # silently return null even though the response itself is readable.
+        if not any(k.lower() == "access-control-allow-origin" for k in headers):
+            headers["Access-Control-Allow-Origin"] = "*"
+        if not any(k.lower() == "access-control-expose-headers" for k in headers):
+            headers["Access-Control-Expose-Headers"] = "*"
         flow.response = mitm_http.Response.make(
             entry.status, entry.body, headers
         )
