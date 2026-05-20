@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, NotRequired, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 import pytest
+from typing_extensions import NotRequired
 
 from torbrowser_driver import TorBrowserDriver
 from torbrowser_mcp.schema import _annotation_to_schema, tool_description, tool_input_schema

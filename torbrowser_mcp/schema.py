@@ -17,6 +17,8 @@ import types
 import typing
 from typing import Any, Union, get_args, get_origin
 
+from typing_extensions import NotRequired, Required
+
 if typing.TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -95,7 +97,7 @@ def _annotation_to_schema(annotation: Any) -> dict[str, Any]:
         raw_required: frozenset[str] = getattr(inner, "__required_keys__", frozenset())
         required = sorted(
             name for name in raw_required
-            if get_origin(hints.get(name)) is not typing.NotRequired
+            if get_origin(hints.get(name)) is not NotRequired
         )
         if required:
             td_result["required"] = required
@@ -104,7 +106,7 @@ def _annotation_to_schema(annotation: Any) -> dict[str, Any]:
     origin = get_origin(inner)
     args = get_args(inner)
 
-    if origin in (typing.NotRequired, typing.Required):
+    if origin in (NotRequired, Required):
         return _annotation_to_schema(args[0])
 
     if origin is typing.Literal:
