@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "torbrowser-mcp"
-version = "0.0.0"
+version = "0.1.0"
 description = "MCP server for stock Tor Browser automation via geckodriver and Marionette"
 readme = "README.md"
 license = "MIT"
