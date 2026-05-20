@@ -14,7 +14,7 @@ The integration-test files (``test_*_smoke_integration.py``) share their
 from __future__ import annotations
 
 import os
-import platform
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -76,7 +76,7 @@ def _build_fake_tbb_layout(root: Path) -> Path:
 
     browser = root / "Browser"
     browser.mkdir(parents=True)
-    if platform.system() == "Windows":
+    if sys.platform == "win32":
         firefox = browser / "firefox.exe"
         tor = browser / "TorBrowser" / "Tor" / "tor.exe"
     else:

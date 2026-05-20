@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import platform
 import subprocess
 import sys
 import time
@@ -12,7 +11,7 @@ import pytest
 
 from torbrowser_driver._process_guardian import ProcessGuardian
 
-IS_WINDOWS = platform.system() == "Windows"
+IS_WINDOWS = sys.platform == "win32"
 
 
 def test_singleton_returns_same_instance() -> None:

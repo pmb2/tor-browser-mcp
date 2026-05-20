@@ -28,8 +28,8 @@ from __future__ import annotations
 
 import logging
 import os
-import platform
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -255,7 +255,7 @@ def _build_env(config: DriverConfig) -> dict[str, str]:
     browser_dir = str(config.browser_dir)
     tor_dir = str(config.tor_path.parent)
 
-    if platform.system() == "Linux":
+    if sys.platform == "linux":
         env["LD_LIBRARY_PATH"] = tor_dir + os.pathsep + env.get("LD_LIBRARY_PATH", "")
         fontconfig_dir = config.browser_dir / "TorBrowser" / "Data" / "fontconfig"
         fontconfig_file = fontconfig_dir / "fonts.conf"
@@ -369,7 +369,7 @@ def launch_browser(
     # Pass cwd to the geckodriver subprocess on Linux so firefox finds its
     # bundled fonts. Selenium's Service does not surface cwd; reach through
     # to the popen_kw bag where supported.
-    if platform.system() == "Linux":
+    if sys.platform == "linux":
         popen_kw = getattr(service, "popen_kw", None)
         if isinstance(popen_kw, dict):
             popen_kw["cwd"] = str(config.browser_dir)

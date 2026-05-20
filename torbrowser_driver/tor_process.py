@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
-import platform
 import re
 import socket
 import subprocess
+import sys
 import threading
 from contextlib import closing, contextmanager, suppress
 from pathlib import Path
@@ -20,7 +20,7 @@ from ._process_guardian import ProcessGuardian
 from .exceptions import DriverConfigError, TorBootstrapTimeout
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
     from subprocess import Popen
 
     from .config import DriverConfig
@@ -32,7 +32,7 @@ _BOOTSTRAP_LINE_TOKENS = ("Bootstrapped", "Problem", "[warn]", "[err]")
 
 
 @contextmanager
-def _tor_lib_env(tor_dir: Path):
+def _tor_lib_env(tor_dir: Path) -> Iterator[None]:
     """Temporarily prepend *tor_dir* to ``LD_LIBRARY_PATH`` on Linux.
 
     The bundled tor binary links against libevent and OpenSSL shipped inside
@@ -44,7 +44,7 @@ def _tor_lib_env(tor_dir: Path):
     restores the original value (or removes the variable if it was absent)
     after the call returns or raises.
     """
-    if platform.system() != "Linux":
+    if sys.platform != "linux":
         yield
         return
 
@@ -337,9 +337,7 @@ def _tcp_listener_pid(host: str, port: int) -> int | None:
     and degrades to ``None`` on any error.
     """
 
-    import platform as _platform
-
-    if _platform.system() != "Windows":
+    if sys.platform != "win32":
         return _tcp_listener_pid_posix(host, port)
     try:
         completed = subprocess.run(
@@ -414,9 +412,7 @@ def _encode_proc_net_endpoint(host: str, port: int) -> str:
 
 
 def _process_exe(pid: int) -> Path | None:
-    import platform as _platform
-
-    if _platform.system() == "Windows":
+    if sys.platform == "win32":
         return _process_exe_windows(pid)
     try:
         return Path(f"/proc/{pid}/exe").readlink()
@@ -432,11 +428,11 @@ def _process_exe_windows(pid: int) -> Path | None:
     "ports are free" path.
     """
 
-    try:
-        import ctypes
-        from ctypes import wintypes
-    except ImportError:
+    if sys.platform != "win32":
         return None
+    import ctypes
+    from ctypes import wintypes
+
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
     process_query_limited_information = 0x1000

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import io
 import os
-import platform
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -157,7 +157,7 @@ def test_cache_hit_skips_network(tmp_path: Path) -> None:
     _write_app_ini(tmp_path, "140.11.0")
     cache_dir = tmp_path / "cache"
     binary_name = (
-        "geckodriver.exe" if platform.system() == "Windows" else "geckodriver"
+        "geckodriver.exe" if sys.platform == "win32" else "geckodriver"
     )
     seeded = cache_dir / "0.36.0" / binary_name
     seeded.parent.mkdir(parents=True)
@@ -175,7 +175,7 @@ def test_cache_hit_skips_network(tmp_path: Path) -> None:
 def test_cache_miss_downloads_extracts_and_caches(tmp_path: Path) -> None:
     _write_app_ini(tmp_path, "140.11.0")
     cache_dir = tmp_path / "cache"
-    if platform.system() == "Windows":
+    if sys.platform == "win32":
         binary_name = "geckodriver.exe"
         archive_bytes = _make_zip_archive(binary_name, _padded_payload())
     else:
@@ -200,7 +200,7 @@ def test_cache_miss_downloads_extracts_and_caches(tmp_path: Path) -> None:
 def test_cache_miss_then_hit_does_not_redownload(tmp_path: Path) -> None:
     _write_app_ini(tmp_path, "140.11.0")
     cache_dir = tmp_path / "cache"
-    if platform.system() == "Windows":
+    if sys.platform == "win32":
         binary_name = "geckodriver.exe"
         archive_bytes = _make_zip_archive(binary_name, _padded_payload())
     else:
@@ -231,7 +231,7 @@ def test_archive_under_minimum_size_is_rejected(tmp_path: Path) -> None:
 def test_archive_missing_binary_member_is_rejected(tmp_path: Path) -> None:
     _write_app_ini(tmp_path, "140.11.0")
     cache_dir = tmp_path / "cache"
-    if platform.system() == "Windows":
+    if sys.platform == "win32":
         archive_bytes = _make_zip_archive("README.txt", _padded_payload())
     else:
         archive_bytes = _make_tar_gz_archive("README.txt", _padded_payload())

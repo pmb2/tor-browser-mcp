@@ -9,7 +9,7 @@ filesystem :class:`~torbrowser_driver.path_policy.PathPolicy`.
 
 from __future__ import annotations
 
-import platform
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -27,7 +27,7 @@ ProfileMode = Literal["ephemeral", "persistent"]
 def _firefox_relative() -> Path:
     """Path to the Tor Browser firefox executable, relative to ``tbb_root``."""
 
-    if platform.system() == "Windows":
+    if sys.platform == "win32":
         return Path("Browser") / "firefox.exe"
     return Path("Browser") / "firefox"
 
@@ -35,7 +35,7 @@ def _firefox_relative() -> Path:
 def _tor_relative() -> Path:
     """Path to the bundled tor binary, relative to ``tbb_root``."""
 
-    if platform.system() == "Windows":
+    if sys.platform == "win32":
         return Path("Browser") / "TorBrowser" / "Tor" / "tor.exe"
     return Path("Browser") / "TorBrowser" / "Tor" / "tor"
 

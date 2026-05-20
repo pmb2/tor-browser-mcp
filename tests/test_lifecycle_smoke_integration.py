@@ -14,7 +14,6 @@ parent has been killed.
 from __future__ import annotations
 
 import os
-import platform
 import subprocess
 import sys
 import textwrap
@@ -26,7 +25,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
-IS_WINDOWS = platform.system() == "Windows"
+IS_WINDOWS = sys.platform == "win32"
 
 
 def _list_descendant_image_paths(tbb_root: Path) -> list[Path]:

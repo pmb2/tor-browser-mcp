@@ -20,8 +20,8 @@ from __future__ import annotations
 import atexit
 import logging
 import os
-import platform
 import signal
+import sys
 import threading
 from typing import TYPE_CHECKING
 
@@ -29,9 +29,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 log = logging.getLogger(__name__)
-
-
-_IS_WINDOWS = platform.system() == "Windows"
 
 
 class ProcessGuardian:
@@ -53,7 +50,7 @@ class ProcessGuardian:
         self._adopted: set[int] = set()
         self._job_handle: int | None = None
         self._closed = False
-        if _IS_WINDOWS:
+        if sys.platform == "win32":
             self._job_handle = _create_windows_job()
             if self._job_handle is not None:
                 atexit.register(self._close_atexit)
@@ -87,7 +84,7 @@ class ProcessGuardian:
         with self._lock:
             if pid in self._adopted:
                 return True
-            if _IS_WINDOWS:
+            if sys.platform == "win32":
                 ok = self._job_handle is not None and _assign_to_job(
                     self._job_handle, pid
                 )
@@ -118,7 +115,7 @@ class ProcessGuardian:
         if self._closed:
             return
         self._closed = True
-        if _IS_WINDOWS:
+        if sys.platform == "win32":
             if self._job_handle is not None:
                 _close_windows_job(self._job_handle)
                 self._job_handle = None
@@ -143,11 +140,10 @@ def _create_windows_job() -> int | None:
     once at WARNING; the caller falls back to no containment.
     """
 
-    try:
-        import ctypes
-        from ctypes import wintypes
-    except ImportError:
+    if sys.platform != "win32":
         return None
+    import ctypes
+    from ctypes import wintypes
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
@@ -197,11 +193,10 @@ def _create_windows_job() -> int | None:
 
 
 def _assign_to_job(job_handle: int, pid: int) -> bool:
-    try:
-        import ctypes
-        from ctypes import wintypes
-    except ImportError:
+    if sys.platform != "win32":
         return False
+    import ctypes
+    from ctypes import wintypes
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
@@ -241,11 +236,11 @@ def _assign_to_job(job_handle: int, pid: int) -> bool:
 
 
 def _close_windows_job(handle: int) -> None:
-    try:
-        import ctypes
-        from ctypes import wintypes
-    except ImportError:
+    if sys.platform != "win32":
         return
+    import ctypes
+    from ctypes import wintypes
+
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     close_handle = kernel32.CloseHandle
     close_handle.argtypes = [wintypes.HANDLE]
@@ -262,7 +257,7 @@ _JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800
 _JobObjectExtendedLimitInformationClass = 9
 
 
-if _IS_WINDOWS:
+if sys.platform == "win32":
     import ctypes
     from ctypes import wintypes
 
@@ -302,7 +297,7 @@ else:
     # On non-Windows the structure is never instantiated. A trivial stand-in
     # keeps the symbol importable so the platform-gated code paths above
     # do not need additional branching.
-    class _JobObjectExtendedLimitInformation:  # type: ignore[no-redef]
+    class _JobObjectExtendedLimitInformation:
         pass
 
 

@@ -51,6 +51,7 @@ import logging
 import os
 import platform
 import shutil
+import sys
 import tarfile
 import urllib.request
 import zipfile
@@ -164,23 +165,22 @@ def _platform_archive_descriptor() -> tuple[str, str, str]:
     archive extracts into, including the ``.exe`` suffix on Windows.
     """
 
-    system = platform.system()
     machine = platform.machine().lower()
 
-    if system == "Linux":
+    if sys.platform == "linux":
         platform_tag = "linux-aarch64" if machine in ("aarch64", "arm64") else "linux64"
         return f"geckodriver-v{{version}}-{platform_tag}.tar.gz", "geckodriver", "tar.gz"
 
-    if system == "Darwin":
+    if sys.platform == "darwin":
         platform_tag = "macos-aarch64" if machine in ("arm64", "aarch64") else "macos"
         return f"geckodriver-v{{version}}-{platform_tag}.tar.gz", "geckodriver", "tar.gz"
 
-    if system == "Windows":
+    if sys.platform == "win32":
         platform_tag = "win-aarch64" if machine in ("arm64", "aarch64") else "win64"
         return f"geckodriver-v{{version}}-{platform_tag}.zip", "geckodriver.exe", "zip"
 
     raise GeckodriverResolveError(
-        f"no geckodriver platform mapping for system={system!r} machine={machine!r}"
+        f"no geckodriver platform mapping for sys.platform={sys.platform!r} machine={machine!r}"
     )
 
 
