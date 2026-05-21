@@ -34,8 +34,6 @@ pip install torbrowser-mcp
 pip install torbrowser-mcp[proxy-intercept]
 ```
 
-> **Status:** pre-PyPI. Until the package lands on PyPI, install from a checkout: `pip install -e .` (or `pip install -e .[proxy-intercept]`).
-
 If you prefer to manage the `geckodriver` yourself, download the version matching Tor Browser's Firefox ESR from <https://github.com/mozilla/geckodriver/releases> (TB 15.0.x ships Firefox 140 ESR, which works with geckodriver v0.36.0) and pass its path via `--geckodriver-path` or place it on `PATH`. See `docs/development.md` for the full version map and cache layout.
 
 ## Getting started
