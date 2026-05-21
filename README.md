@@ -23,6 +23,8 @@ Drives the stock Tor Browser via geckodriver + Marionette, preserves the anonymi
 
 Python 3.11+ and an extracted Tor Browser bundle. The `proxy-intercept` extra additionally requires Python 3.12+ because of mitmproxy 11's runtime floor.
 
+Verified on Windows x86_64 against Tor Browser 15.0.13 and Linux x86_64 against Tor Browser 15.0.14 (Firefox ESR 140.10.2, geckodriver 0.36.0). macOS is not supported in 0.1.0.
+
 A compatible `geckodriver` binary is also required. The server resolves which binary to use in this order: `--geckodriver-path` if you supplied one; then `<tbb_root>/Browser/geckodriver` if it exists and is executable (covers older TB releases that shipped it in the tarball); then a `geckodriver` on `PATH`; then a version matching the bundle's Firefox ESR downloaded into `~/.cache/tor-browser-mcp/geckodriver/<version>/` on first run. Subsequent sessions reuse the cached binary. To avoid the on-first-run download (air-gapped or hostile network), pre-populate the cache directory from an out-of-band channel or pass `--geckodriver-path` to point at a binary you already have.
 
 ## Install
@@ -169,21 +171,6 @@ Tool calls that read or write files are resolved through a path policy: outputs 
 
 - **Automation is detectable.** Default WebDriver mode leaves `navigator.webdriver === true`; pages and scripts inside the session can see they are being driven.
 - **Not a stealth tool.** TLS client fingerprint, ALPN settings, and the proxy negotiation pattern distinguish a driven session from default Tor Browser use even before any capability adds further signals.
-- **Not a Playwright drop-in.** No async/await on every call, no auto-waiting beyond the explicit `browser_wait_for_*` primitives, no built-in trace viewer.
-- **Linux integration smoke results** — see table below.
-- **macOS is out of scope.**
-
-### Linux integration smoke results (2026-05-20)
-
-Tor Browser 15.0.14 / Firefox ESR 140.10.2esr / geckodriver 0.36.0 / Linux x86_64 / Python 3.14.4
-
-| Smoke file | Result |
-| --- | --- |
-| `test_smoke_integration.py` (driver-level) | [ok] smoked 2026-05-20 (fix in 7e5f554) |
-| `test_mcp_smoke_integration.py` (MCP wire) | [ok] smoked 2026-05-20 |
-| `test_optional_caps_smoke_integration.py` | [ok] smoked 2026-05-20 |
-| `test_helper_extension_smoke_integration.py` | [ok] smoked 2026-05-20 (fix in 7583f16) |
-| `test_proxy_intercept_smoke_integration.py` | [ok] smoked 2026-05-20 |
 
 ## Layout
 
