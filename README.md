@@ -21,7 +21,7 @@ Drives the stock Tor Browser via geckodriver + Marionette, preserves the anonymi
 
 ## Requirements
 
-Python 3.10+ and an extracted Tor Browser bundle. The `proxy-intercept` extra additionally requires Python 3.12+ because of mitmproxy 11's runtime floor.
+Python 3.11+ and an extracted Tor Browser bundle. The `proxy-intercept` extra additionally requires Python 3.12+ because of mitmproxy 11's runtime floor.
 
 A compatible `geckodriver` binary is also required. The server resolves which binary to use in this order: `--geckodriver-path` if you supplied one; then `<tbb_root>/Browser/geckodriver` if it exists and is executable (covers older TB releases that shipped it in the tarball); then a `geckodriver` on `PATH`; then a version matching the bundle's Firefox ESR downloaded into `~/.cache/tor-browser-mcp/geckodriver/<version>/` on first run. Subsequent sessions reuse the cached binary. To avoid the on-first-run download (air-gapped or hostile network), pre-populate the cache directory from an out-of-band channel or pass `--geckodriver-path` to point at a binary you already have.
 
@@ -124,7 +124,7 @@ Enabling this capability changes what Tor Browser looks like on the wire and dis
 - **The local intercept proxy sees every page's plaintext.** Decrypted bodies live in memory in the driver process and are written to disk verbatim when `browser_intercept_save` is called.
 - **A per-session MITM CA is installed into the Tor Browser install directory.** The driver writes (or deep-merges into) `<tbb_root>/Browser/distribution/policies.json` and restores the prior state on teardown. This is destructive in the sense that it mutates the on-disk Tor Browser bundle for the lifetime of the session.
 - **The session is trivially distinguishable from default Tor Browser** via TLS client fingerprint, ALPN/HTTP-2 settings, and the proxy negotiation pattern. This is not a stealth mode; use it for adversary emulation, detection engineering, and protocol reversing against content you control or are authorised to inspect.
-- **Python 3.12+ is required for the optional extra.** `pip install torbrowser-mcp[proxy-intercept]` pulls in `mitmproxy>=11,<13`, which transitively requires `mitmproxy-rs>=0.12`. That wheel ships only `cp312-abi3` builds (Windows x86_64, manylinux x86_64, manylinux aarch64, macOS universal2). The core install stays at Python 3.10+; only this capability raises the floor.
+- **Python 3.12+ is required for the optional extra.** `pip install torbrowser-mcp[proxy-intercept]` pulls in `mitmproxy>=11,<13`, which transitively requires `mitmproxy-rs>=0.12`. That wheel ships only `cp312-abi3` builds (Windows x86_64, manylinux x86_64, manylinux aarch64, macOS universal2). The core install stays at Python 3.11+; only this capability raises the floor further.
 
 When the cap is in the enabled set, the MCP server emits the warning above (verbatim) to stderr at `build_server` time so a misconfigured deployment cannot accidentally start the server without the user seeing the trade-off.
 
