@@ -50,6 +50,7 @@ jobs:
     needs: build
     if: needs.build.outputs.is-prerelease == 'true'
     runs-on: ubuntu-latest
+    environment: testpypi
     permissions:
       id-token: write
     steps:
