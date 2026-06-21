@@ -13,7 +13,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from selenium.common.exceptions import WebDriverException
-from stem import ControllerError
+from stem import ControllerError, Signal
 
 from .capabilities import capability
 from .exceptions import TorBrowserDriverError
@@ -378,3 +378,78 @@ class _TorSecurityCapabilityMixin:
             return {"running": False, "error": str(exc)}
         except RuntimeError as exc:
             return {"running": False, "error": str(exc)}
+
+    @capability("tor")
+    def tor_rotate_identity(
+        self,
+        post_signal_sleep: float = 15.0,
+    ) -> dict[str, Any]:
+        """Full circuit rotation: send NEWNYM, wait for new circuits, verify
+        the exit node changed, and return a before/after report.
+
+        ``post_signal_sleep`` controls how long to wait after NEWNYM for
+        the new circuit to build (default 15s; tor enforces a 10s cooldown
+        internally so values under 12 may return stale circuit data).
+
+        The return dict contains ``signaled`` (bool), ``before`` and
+        ``after`` snapshots of circuit counts and exit node info,
+        ``changed`` (bool indicating the exit fingerprint changed),
+        ``circuit_rebuilt_after`` (bool indicating at least one BUILT
+        circuit exists after the rotation), and ``wait_seconds`` (the
+        actual time waited).
+        """
+        ctrl = _require_controller(self)
+        result: dict[str, Any] = {
+            "signaled": False,
+            "before": None,
+            "after": None,
+            "changed": None,
+            "circuit_rebuilt_after": False,
+            "wait_seconds": None,
+            "error": None,
+        }
+
+        try:
+            # Snapshot before
+            raw_before = ctrl.get_info("circuit-status") or ""
+            built_before = sum(1 for line in raw_before.splitlines()
+                               if " BUILT " in line)
+            exit_before = _resolve_exit_node_ip(ctrl)
+
+            # Send NEWNYM
+            ctrl.signal(Signal.NEWNYM)
+            result["signaled"] = True
+
+            # Wait for cooldown + circuit rebuild
+            wait = float(post_signal_sleep)
+            time.sleep(wait)
+            result["wait_seconds"] = wait
+
+            # Snapshot after
+            raw_after = ctrl.get_info("circuit-status") or ""
+            built_after = sum(1 for line in raw_after.splitlines()
+                              if " BUILT " in line)
+            exit_after = _resolve_exit_node_ip(ctrl)
+
+            # Populate result
+            result["before"] = {
+                "built_circuits": built_before,
+                "total_circuits": len([l for l in raw_before.splitlines() if l.strip()]),
+                "exit_node": exit_before,
+            }
+            result["after"] = {
+                "built_circuits": built_after,
+                "total_circuits": len([l for l in raw_after.splitlines() if l.strip()]),
+                "exit_node": exit_after,
+            }
+            result["changed"] = (
+                exit_before != exit_after
+                if exit_before and exit_after
+                else None
+            )
+            result["circuit_rebuilt_after"] = built_after > 0
+
+        except (ControllerError, RuntimeError) as exc:
+            result["error"] = str(exc)
+
+        return result
