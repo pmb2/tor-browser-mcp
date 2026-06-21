@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import logging
 import os
+import time
 from pathlib import Path
 
 from torbrowser_driver import (
@@ -29,6 +30,8 @@ from .server import ServerOptions, run_server
 _LOG_LEVELS = ("debug", "info", "warning", "error")
 _PROFILE_MODES = ("ephemeral", "persistent")
 _TRANSPORTS = ("stdio",)
+
+log = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -146,6 +149,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--headless",
         action="store_true",
         help="Run Tor Browser with -headless (off by default).",
+    )
+    parser.add_argument(
+        "--max-restarts",
+        type=int,
+        default=10,
+        help="Max automatic restarts on crash before giving up (default 10, 0=no restart).",
+    )
+    parser.add_argument(
+        "--restart-delay",
+        type=float,
+        default=5.0,
+        help="Delay in seconds before restarting after a crash (default 5).",
     )
     parser.add_argument(
         "--log-level",
@@ -267,7 +282,14 @@ def config_from_args(
 
 
 def main() -> None:
-    """Parse the command line and run the MCP server until shutdown."""
+    """Parse the command line and run the MCP server with crash recovery.
+
+    If the server crashes (browser crash, socket failure, etc.), it is
+    automatically restarted up to ``--max-restarts`` times with an
+    exponential backoff delay (starting at ``--restart-delay`` seconds,
+    doubling each attempt, capped at 120s). Clean shutdowns (exit code 0)
+    break the restart loop.
+    """
 
     ns = parse_args()
     config, options = config_from_args(ns)
@@ -275,4 +297,28 @@ def main() -> None:
         level=getattr(logging, options.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    asyncio.run(run_server(config, options))
+
+    max_restarts = ns.max_restarts
+    restart_delay = ns.restart_delay
+    attempt = 0
+
+    while True:
+        try:
+            asyncio.run(run_server(config, options))
+            log.info("Server shutdown cleanly.")
+            return
+        except Exception as exc:
+            attempt += 1
+            if max_restarts > 0 and attempt > max_restarts:
+                log.error(
+                    "Server crashed %d times (max %d). Giving up.",
+                    attempt, max_restarts,
+                )
+                raise
+
+            delay = min(restart_delay * (2 ** (attempt - 1)), 120.0)
+            log.warning(
+                "Server crashed (attempt %d/%d): %s. Restarting in %.1fs...",
+                attempt, max_restarts, exc, delay,
+            )
+            time.sleep(delay)
