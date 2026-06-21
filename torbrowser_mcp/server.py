@@ -269,8 +269,25 @@ async def run_server(config: DriverConfig, options: ServerOptions) -> None:
         )
 
     from .tool_module import ToolContext, load_tool_module
+    from torbrowser_driver.exceptions import BrowserLaunchError
 
     with TorBrowserDriver(config) as driver:
+        # Verify browser is alive after launch (headless GFX crashes Windows silently)
+        try:
+            wd = driver.webdriver
+            if wd is None:
+                raise BrowserLaunchError("webdriver not initialized after launch")
+            await asyncio.to_thread(
+                lambda: wd.execute_script("return navigator.userAgent")
+            )
+            log.info("Browser health check OK")
+        except BrowserLaunchError:
+            raise
+        except Exception as hc_exc:
+            raise BrowserLaunchError(
+                f"browser startup health check failed: {hc_exc}"
+            ) from hc_exc
+
         server, registry = build_server(driver, config.enabled_caps)
 
         if options.tool_modules:
