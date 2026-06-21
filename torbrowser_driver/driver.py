@@ -35,6 +35,7 @@ from ._proxy_intercept_policies import (
 from ._proxy_intercept_primitives import _ProxyInterceptCapabilityMixin
 from ._proxy_intercept_substrate import ProxyManager
 from ._state_primitives import _StateCapabilityMixin
+from ._stealth_primitives import _StealthCapabilityMixin, patch_prefs as _stealth_patch_prefs
 from ._tor_primitives import _TorCapabilityMixin
 from ._tor_routing_primitives import _TorRoutingCapabilityMixin
 from ._tor_security_primitives import _TorSecurityCapabilityMixin
@@ -61,6 +62,7 @@ class TorBrowserDriver(
     _StateCapabilityMixin,
     _ExtractCapabilityMixin,
     _DiagnosticsCapabilityMixin,
+    _StealthCapabilityMixin,
     _TorCapabilityMixin,
     _TorSecurityCapabilityMixin,
     _NetworkObserveCapabilityMixin,
@@ -135,6 +137,17 @@ class TorBrowserDriver(
             self.webdriver, _ = launch_browser(
                 config, session_dir=self._session_dir
             )
+            # Auto-apply stealth: inject JS, install nav callback
+            try:
+                from ._stealth_primitives import (
+                    _inject_stealth_js,
+                    install_navigation_callback,
+                )
+                _inject_stealth_js(self.webdriver)
+                install_navigation_callback(self.webdriver)
+                setattr(self.webdriver, "_stealth_nav_callback_installed", True)
+            except Exception:
+                log.info("stealth auto-apply skipped (no page context yet)")
             if self._helper_bridge is not None:
                 install_helper(self, config, self._helper_bridge)
         except Exception:  # pragma: no cover - teardown branch

@@ -177,6 +177,7 @@ def _load_bearing_prefs(config: DriverConfig) -> dict[str, Any]:
         # --- HARDENED AUTOMATION PROFILE ---
         # Suppress navigator.webdriver flag
         "dom.webdriver.enabled": False,
+        "marionette.enabled": False,
         "useAutomationExtension": False,
         # Disable WebRTC (IP leak vector)
         "media.peerconnection.enabled": False,
