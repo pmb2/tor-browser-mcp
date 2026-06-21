@@ -109,6 +109,9 @@ class _TorSecurityCapabilityMixin:
         controller: Controller | None
         config: DriverConfig
 
+        def is_browser_alive(self) -> bool: ...
+        def recover_browser(self) -> dict[str, Any]: ...
+
     @capability("tor")
     def tor_dns_leak_test(
         self, timeout: float = 60.0, cache_buster: bool = True
@@ -452,4 +455,58 @@ class _TorSecurityCapabilityMixin:
         except (ControllerError, RuntimeError) as exc:
             result["error"] = str(exc)
 
+        return result
+
+    @capability("tor")
+    def tor_recover_browser(self) -> dict[str, Any]:
+        """Re-launch the Tor Browser if it crashed, without restarting tor.
+
+        Returns ``success`` (bool), ``error`` (str | None), and
+        ``browser_alive`` (bool after recovery). Use this when
+        browser_navigate or other browser tools stop responding
+        (GFX crash, timeout, etc.) — tor circuits are preserved.
+        """
+        try:
+            if hasattr(self, "recover_browser"):
+                result = self.recover_browser()
+                alive = hasattr(self, "is_browser_alive") and self.is_browser_alive()
+                result["browser_alive"] = alive
+                return result
+            return {"success": False, "error": "driver has no recover_browser"}
+        except TorBrowserDriverError as exc:
+            return {"success": False, "error": str(exc)}
+
+    @capability("tor")
+    def tor_browser_health(self) -> dict[str, Any]:
+        """Check if the browser webdriver session is still responsive.
+
+        Returns ``browser_alive`` (bool), ``current_url`` (str | None),
+        and ``tor_alive`` (bool).
+        """
+        result: dict[str, Any] = {
+            "browser_alive": False,
+            "current_url": None,
+            "tor_alive": False,
+        }
+        try:
+            ctrl = _require_controller(self)
+            result["tor_alive"] = bool(ctrl.is_alive())
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "is_browser_alive") and self.is_browser_alive():
+                result["browser_alive"] = True
+                try:
+                    result["current_url"] = self.webdriver.current_url
+                except Exception:
+                    pass
+            else:
+                try:
+                    drv = _require_driver(self)
+                    result["current_url"] = drv.current_url
+                    result["browser_alive"] = True
+                except Exception:
+                    pass
+        except Exception:
+            pass
         return result

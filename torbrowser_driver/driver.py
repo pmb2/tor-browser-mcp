@@ -274,11 +274,7 @@ class TorBrowserDriver(
                 log.exception("policies.json restore raised during teardown")
             self._policies_snapshot_dir = None
 
-        if self.webdriver is not None:
-            with suppress(Exception):
-                self.webdriver.quit()
-            self.webdriver = None
-
+        self._close_browser()
         if self._tor_process is not None:
             shutdown_tor(self._tor_process, self.controller)
             self._tor_process = None
@@ -291,6 +287,70 @@ class TorBrowserDriver(
         if self._owns_session_dir and self._session_dir is not None:
             with suppress(Exception):
                 _secure_wipe_dir(self._session_dir, passes=1)
+
+    def _close_browser(self) -> None:
+        """Shut down just the browser (keep tor alive for recovery)."""
+        if self._helper_bridge is not None:
+            with suppress(Exception):
+                uninstall_helper(self, self.config, self._helper_bridge)
+            self._helper_bridge = None
+        if self._proxy_manager is not None:
+            try:
+                self._proxy_manager.stop()
+            except Exception:
+                log.exception("intercept proxy stop raised during teardown")
+            self._proxy_manager = None
+        if self.webdriver is not None:
+            with suppress(Exception):
+                self.webdriver.quit()
+            self.webdriver = None
+
+    def is_browser_alive(self) -> bool:
+        """Check if the browser webdriver session is still responsive."""
+        if self.webdriver is None:
+            return False
+        try:
+            _ = self.webdriver.current_url
+            return True
+        except Exception:
+            return False
+
+    def recover_browser(self) -> dict[str, Any]:
+        """Re-launch the browser using the existing tor session.
+
+        Called after the browser crashes (GFX crash, timeout, etc.).
+        Tor stays up so circuits are preserved. Returns a dict with
+        ``success`` (bool) and ``error`` (str | None).
+
+        This is a lightweight restart: the existing profile is re-used,
+        no new session directory is created, and tor is not touched.
+        """
+        if self._tor_process is None or self.controller is None:
+            return {"success": False,
+                    "error": "tor not running; cannot recover without tor"}
+
+        # Close the old browser if still hanging around
+        self._close_browser()
+
+        # Re-launch browser with the existing config
+        try:
+            from .browser_process import launch_browser
+            self.webdriver, _ = launch_browser(
+                self.config, session_dir=self._session_dir
+            )
+            # Re-apply stealth
+            try:
+                from ._stealth_primitives import (
+                    _inject_stealth_js,
+                    install_navigation_callback,
+                )
+                _inject_stealth_js(self.webdriver)
+                install_navigation_callback(self.webdriver)
+            except Exception:
+                pass
+            return {"success": True, "error": None}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
 
 
 def _secure_wipe_dir(path: Path, passes: int = 1) -> None:
