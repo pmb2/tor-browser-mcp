@@ -174,6 +174,63 @@ def _load_bearing_prefs(config: DriverConfig) -> dict[str, Any]:
         "browser.download.manager.showWhenStarting": False,
         "browser.helperApps.neverAsk.saveToDisk": never_ask_mime,
         "pdfjs.disabled": True,
+        # --- HARDENED AUTOMATION PROFILE ---
+        # Suppress navigator.webdriver flag
+        "dom.webdriver.enabled": False,
+        "useAutomationExtension": False,
+        # Disable WebRTC (IP leak vector)
+        "media.peerconnection.enabled": False,
+        "media.peerconnection.ice.obfuscate_host_addresses": True,
+        # Disable geolocation
+        "geo.enabled": False,
+        "geo.provider.use_corelocation": False,
+        "geo.provider.use_gpsd": False,
+        "geo.provider.use_geoclue": False,
+        # Disable telemetry
+        "toolkit.telemetry.enabled": False,
+        "toolkit.telemetry.unified": False,
+        "toolkit.telemetry.archive.enabled": False,
+        "datareporting.healthreport.uploadEnabled": False,
+        "datareporting.policy.dataSubmissionEnabled": False,
+        # Disable notifications
+        "dom.webnotifications.enabled": False,
+        "dom.push.enabled": False,
+        # Sanitize on shutdown
+        "privacy.sanitize.sanitizeOnShutdown": True,
+        "privacy.clearOnShutdown.cache": True,
+        "privacy.clearOnShutdown.cookies": True,
+        "privacy.clearOnShutdown.downloads": True,
+        "privacy.clearOnShutdown.formdata": True,
+        "privacy.clearOnShutdown.history": True,
+        "privacy.clearOnShutdown.offlineApps": True,
+        "privacy.clearOnShutdown.sessions": True,
+        "privacy.clearOnShutdown.siteSettings": True,
+        # Resist fingerprinting (overlay on top of Tor's RFP)
+        "privacy.resistFingerprinting": True,
+        "privacy.trackingprotection.fingerprinting.enabled": True,
+        "privacy.trackingprotection.cryptomining.enabled": True,
+        # Disable password manager
+        "signon.rememberSignons": False,
+        "signon.autofillForms": False,
+        # Disable health reports
+        "browser.selfsupport.url": "",
+        "browser.crashReports.unsubmittedCheck.autoSubmit": False,
+        "browser.crashReports.unsubmittedCheck.enabled": False,
+        # Disable Pocket
+        "extensions.pocket.enabled": False,
+        # Disable form autofill
+        "browser.formfill.enable": False,
+        # Disable safe browsing checks (privacy)
+        "browser.safebrowsing.enabled": False,
+        "browser.safebrowsing.malware.enabled": False,
+        "browser.safebrowsing.phishing.enabled": False,
+        # Disable speculative connections
+        "network.http.speculative-parallel-limit": 0,
+        "network.dns.disablePrefetch": True,
+        "network.prefetch-next": False,
+        # Disable link prefetch
+        "network.predictor.enabled": False,
+        "network.predictor.enable-prefetch": False,
     }
     if config.include_legacy_tor_prefs:
         prefs.update(

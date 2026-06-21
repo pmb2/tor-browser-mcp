@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import os
 import secrets
 import shutil
 import socket
 import tempfile
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ._core_primitives import _CoreCapabilityMixin
 from ._diagnostics_primitives import _DiagnosticsCapabilityMixin
@@ -36,6 +37,7 @@ from ._proxy_intercept_substrate import ProxyManager
 from ._state_primitives import _StateCapabilityMixin
 from ._tor_primitives import _TorCapabilityMixin
 from ._tor_routing_primitives import _TorRoutingCapabilityMixin
+from ._tor_security_primitives import _TorSecurityCapabilityMixin
 from ._unsafe_primitives import _UnsafeCapabilityMixin
 from ._vision_primitives import _VisionCapabilityMixin
 from .browser_process import launch_browser
@@ -60,6 +62,7 @@ class TorBrowserDriver(
     _ExtractCapabilityMixin,
     _DiagnosticsCapabilityMixin,
     _TorCapabilityMixin,
+    _TorSecurityCapabilityMixin,
     _NetworkObserveCapabilityMixin,
     _VisionCapabilityMixin,
     _HighlightCapabilityMixin,
@@ -274,7 +277,54 @@ class TorBrowserDriver(
 
         if self._owns_session_dir and self._session_dir is not None:
             with suppress(Exception):
-                shutil.rmtree(self._session_dir, ignore_errors=True)
+                _secure_wipe_dir(self._session_dir, passes=1)
+
+
+def _secure_wipe_dir(path: Path, passes: int = 1) -> None:
+    """Overwrite all files in *path* with random data before deletion.
+
+    Performs *passes* overwrite passes (default 1 for speed; 3 for
+    paranoid). Directories themselves are removed with ``rmtree`` after
+    their contents have been scrubbed. Best-effort: any error during
+    wipe is suppressed so teardown can continue.
+    """
+    if not path.is_dir():
+        return
+    try:
+        for root_str, dirs, files in os.walk(str(path), topdown=False):
+            root = Path(root_str)
+            for name in files:
+                fpath = root / name
+                try:
+                    _secure_wipe_file(fpath, passes)
+                except Exception:
+                    pass
+            for name in dirs:
+                try:
+                    dpath = root / name
+                    _secure_wipe_dir(dpath, passes)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def _secure_wipe_file(path: Path, passes: int = 1) -> None:
+    """Overwrite *path* with random data *passes* times, then unlink."""
+    if not path.is_file():
+        return
+    length = path.stat().st_size
+    if length < 1:
+        path.unlink(missing_ok=True)
+        return
+    for _ in range(passes):
+        try:
+            with open(path, "wb") as f:
+                f.write(os.urandom(length))
+        except Exception:
+            pass
+    path.unlink(missing_ok=True)
 
 
 _STALE_SESSION_DIR_MAX_AGE_SECONDS = 24 * 3600
